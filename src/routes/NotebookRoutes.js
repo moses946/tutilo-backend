@@ -1,4 +1,4 @@
-const express = require('express');
+import express from 'express';
 
 const notebookRouter = express.Router();
 notebookRouter.post('/', (req, res)=>{});

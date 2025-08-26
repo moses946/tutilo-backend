@@ -1,13 +1,13 @@
-const express = require('express');
-const dotenv = require('dotenv');
+import express from 'express';
+import dotenv from 'dotenv';
+import notebookRouter from './src/routes/NotebookRoutes.js';
+import authRouter from './src/routes/AuthRoutes.js';
+import billingRouter from './src/routes/BillingRoutes.js';
+import userRouter from './src/routes/UserRoutes.js';
+import chatRouter from './src/routes/ChatRoutes.js';
+import quizRouter from './src/routes/QuizRoutes.js';
+import flashcardsRouter from './src/routes/FlashCardsRoutes.js';
 const app = express();
-const notebookRouter = require('./src/routes/NotebookRoutes');
-const authRouter = require('./src/routes/AuthRoutes');
-const billingRouter = require('./src/routes/BillingRoutes');
-const userRouter = require('./src/routes/UserRoutes');
-const chatRouter = require('./src/routes/ChatRoutes');
-const quizRouter = require('./src/routes/QuizRoutes');
-const flashcardsRouter = require('./src/routes/FlashCardsRoutes');
 
 dotenv.config();
 var PORT = process.env.PORT

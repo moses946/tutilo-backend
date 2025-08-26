@@ -1,4 +1,4 @@
-const express = require('express');
+import express from 'express';
 
 const billingRouter = express.Router();
 billingRouter.get('/subscription', (req, res)=>{});

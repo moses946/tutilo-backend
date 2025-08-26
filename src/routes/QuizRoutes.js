@@ -1,4 +1,4 @@
-const express = require('express');
+import express from 'express';
 
 const quizRouter = express.Router();
 quizRouter.post('/', (req, res)=>{});

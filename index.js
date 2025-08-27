@@ -7,10 +7,13 @@ import userRouter from './src/routes/UserRoutes.js';
 import chatRouter from './src/routes/ChatRoutes.js';
 import quizRouter from './src/routes/QuizRoutes.js';
 import flashcardsRouter from './src/routes/FlashCardsRoutes.js';
+
 const app = express();
 
 dotenv.config();
 var PORT = process.env.PORT
+
+
 
 // Middleware
 app.use(express.json());

@@ -7,3 +7,5 @@ admin.initializeApp({
 
 export default admin;
 
+export const bucket = admin.storage().bucket()
+

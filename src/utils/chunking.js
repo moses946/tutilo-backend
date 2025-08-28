@@ -44,7 +44,11 @@ async function extractPdfText(file){
     // Map to objects with 1-based page numbers
     const pagesWithNumbers = pages.map((text, index) => {
         const cleaned = (text || '').trim();
-        return { pageNumber: index + 1, text: cleaned };
+        // Estimate token count using rule: 100 tokens ≈ 60-80 words.
+        // Use midpoint 70 words ≈ 100 tokens => tokens ≈ words * (100/70).
+        const wordCount = cleaned.length > 0 ? cleaned.split(/\s+/).filter(Boolean).length : 0;
+        const tokenCount = Math.round(wordCount * (100 / 70));
+        return { pageNumber: index + 1, text: cleaned, tokenCount };
     });
     // Filter out blank pages entirely
     let nonBlankPages = pagesWithNumbers.filter(p => p.text && p.text.length > 0);

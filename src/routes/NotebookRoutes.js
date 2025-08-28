@@ -1,5 +1,5 @@
 import express from 'express';
-import {upload} from '../utils/utility.js'
+import {upload, handleEmbedding} from '../utils/utility.js'
 import extractPdfText from '../utils/chunking.js'
 import fs from "fs";
 import { promises as fsp } from 'fs';
@@ -10,6 +10,7 @@ notebookRouter.get('/', async (req, res)=>{
     try{
         let file = await fsp.readFile('./src/routes/notes.pdf');
         let pages = await extractPdfText(file);
+        handleEmbedding(pages);
         res.json(pages);
     }catch(err){
         console.error('PDF parse error:', err);

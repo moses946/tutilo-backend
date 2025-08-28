@@ -5,24 +5,46 @@ import {ai} from '../models/models.js'
 const storage = multer.memoryStorage();
 export const upload = multer({ storage });
 
-export const handleFileUpload = (file, path)=>{
+export const handleFileUpload = async (file, path)=>{
     try{
-        const blob = bucket.file(path);
-        const blobStream = blob.createWriteStream({
-            metadata:{
-                contentType:file.mimeType,
+        const destinationPath = `${path}`;
+        const blob = bucket.file(destinationPath);
+        await blob.save(file.buffer, {
+            metadata: {
+                contentType: file.mimetype,
             },
-        })
-        blobStream.on('error', (err)=>{
-        console.error(`Uploading to bucket error: ${err}`);
-        return false
-        })
-        blobStream.on('finish', ()=>{
-            return true
-        })
+            resumable: false,
+        });
+        return { path: destinationPath, name: file.originalname, size: file.size };
     }catch(err){
         console.log(`Error in handleFileUpload func:${err}`);
+        throw err;
     }
+}
+
+export const handleBulkFileUpload = async (files, basePath)=>{
+    const uploads = files.map((file)=>{
+        const safeName = file.originalname;
+        const destination = `${basePath}/${safeName}`;
+        return handleFileUpload(file, destination);
+    });
+    return Promise.all(uploads);
+}
+ 
+export const handleBulkChunkUpload = async (chunks, basePath)=>{
+    // chunks: Array<{ name: string, chunks: Array<{pageNumber:number, text:string, tokenCount:number}> }>
+    const uploads = chunks.map(async (item)=>{
+        const safeName = `${item.name}.chunks.json`;
+        const destination = `${basePath}/${safeName}`;
+        const payload = Buffer.from(JSON.stringify(item.chunks), 'utf-8');
+        const blob = bucket.file(destination);
+        await blob.save(payload, {
+            metadata: { contentType: 'application/json' },
+            resumable: false,
+        });
+        return { path: destination, name: safeName, size: payload.length };
+    });
+    return Promise.all(uploads);
 }
 
 /*
@@ -45,5 +67,6 @@ export const handleEmbedding = async (pages)=>{
         }
     );
     console.log('Embedding:', response.embeddings.length);
+    return response.embeddings
     
 }

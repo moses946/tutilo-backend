@@ -24,7 +24,7 @@ export const handleFileUpload = async (file, path)=>{
 
 export const handleBulkFileUpload = async (files, basePath)=>{
     const uploads = files.map((file)=>{
-        const safeName = file.originalname;
+        const safeName = file.name;
         const destination = `${basePath}/${safeName}`;
         return handleFileUpload(file, destination);
     });

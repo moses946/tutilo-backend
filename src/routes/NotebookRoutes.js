@@ -3,7 +3,7 @@ import {upload, handleEmbedding, handleFileUpload, handleBulkFileUpload, handleB
 import extractPdfText from '../utils/chunking.js'
 import fs from "fs";
 import { promises as fsp } from 'fs';
-import { createNotebookQuery } from '../models/query.js';
+import { createMaterialQuery, createNotebookQuery } from '../models/query.js';
 
 const notebookRouter = express.Router();
 notebookRouter.post('/', upload.array('files'), handleNotebookCreation);
@@ -31,22 +31,25 @@ async function handleNotebookCreation(req, res){
     //create a notebook first
     let notebookRef = await createNotebookQuery(data);
     try{
-        const noteBookBasePath = `notebooks/${notebookRef.id}`;
+        const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
         // upload original files
         const uploaded = await handleBulkFileUpload(files, noteBookBasePath);
         // extract chunks per file sequentially to maintain mapping
         const chunkItems = [];
         for(const file of files){
             const extracts = await extractPdfText(file.buffer);
-            chunkItems.push({ name: file.originalname, chunks: extracts });
+            chunkItems.push({ name: file.name, chunks: extracts });
         }
         // upload chunks as JSON blobs under chunks subfolder
-        const uploadedChunks = await handleBulkChunkUpload(chunkItems, `${noteBookBasePath}/chunks`);
+        const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
+        const uploadedChunks = await handleBulkChunkUpload(chunkItems, chunkBasePath);
         res.status(201).json({
             notebookId: notebookRef.id,
             uploaded,
             uploadedChunks,
         });
+        // create materials reference
+        createMaterialQuery(notebookRef, files)
     }catch(err){
         console.error('Bulk upload failed:', err);
         res.status(500).json({error: 'Bulk upload failed'});

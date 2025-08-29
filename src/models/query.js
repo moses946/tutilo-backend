@@ -36,7 +36,7 @@ export const createMaterialQuery = async (notebookRef, materials) =>{
             {
                 notebookID:notebookRef,
                 status:'processed',
-                storagePath:materials[0].path,
+                storagePath:materials[0].name,
                 dateCreated:now
             }
         )
@@ -50,7 +50,7 @@ export const createMaterialQuery = async (notebookRef, materials) =>{
                     notebookID:notebookRef,
                     name:material.name,
                     status:'processed',
-                    storagePath:material.path,
+                    storagePath:material.name,
                     dateCreated:now
                 }
             batch.set(materialRef, materialDoc);

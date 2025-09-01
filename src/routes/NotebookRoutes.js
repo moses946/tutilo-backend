@@ -1,7 +1,6 @@
 import express from 'express';
 import {upload, handleEmbedding, handleFileUpload, handleBulkFileUpload, handleBulkChunkUpload, handleChunkEmbeddingAndStorage} from '../utils/utility.js'
 import extractPdfText from '../utils/chunking.js'
-import fs from "fs";
 import { promises as fsp } from 'fs';
 import { 
     createMaterialQuery, 

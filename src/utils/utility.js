@@ -37,9 +37,9 @@ export const handleBulkFileUpload = async (files, basePath)=>{
 export const handleBulkChunkUpload = async (chunks, basePath)=>{
     // chunks: Array<{ name: string, chunks: Array<{pageNumber:number, text:string, tokenCount:number}> }>
     const uploads = chunks.map(async (item)=>{
-        const safeName = `${item.name}.chunks.json`;
+        const safeName = `${item.name}.json`;
         const destination = `${basePath}/${safeName}`;
-        const payload = Buffer.from(JSON.stringify(item.chunks), 'utf-8');
+        const payload = Buffer.from(JSON.stringify(item.text), 'utf-8');
         const blob = bucket.file(destination);
         await blob.save(payload, {
             metadata: { contentType: 'application/json' },
@@ -104,9 +104,6 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
             vector: embedding.values,
             payload: {
                 chunkID: chunkRefs[index].id,
-                pageNumber: chunks[index].pageNumber,
-                tokenCount: chunks[index].tokenCount,
-                text: chunks[index].text.substring(0, 500), // Store first 500 chars for preview
                 createdAt: new Date().toISOString()
             }
         }));
@@ -129,7 +126,7 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
         }
         
         // Upload points to Qdrant in batches
-        const batchSize = 100;
+        let batchSize = 100;
         const uploadedPoints = [];
         
         for (let i = 0; i < points.length; i += batchSize) {
@@ -137,6 +134,8 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
             const result = await qdrantClient.upsert(collectionName, {
                 points: batch
             });
+            // Making the batch size dynamic
+            batchSize = Math.min(batchSize, points.length - i);
             uploadedPoints.push(...batch.map(point => point.id));
             console.log(`Uploaded batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(points.length / batchSize)}`);
         }

@@ -79,7 +79,7 @@ export const createChunksQuery = async (chunks, materialRef) => {
         const chunkRef = await db.collection('Chunk').add({
             materialID: materialRef,
             pageNumber: chunks[0].pageNumber,
-            text: chunks[0].text,
+            // text: chunks[0].text,
             tokenCount: chunks[0].tokenCount,
             dateCreated: now,
             qdrantPointId: null // Will be updated after embedding creation
@@ -92,7 +92,7 @@ export const createChunksQuery = async (chunks, materialRef) => {
             const chunkDoc = {
                 materialID: materialRef,
                 pageNumber: chunk.pageNumber,
-                text: chunk.text,
+                // text: chunk.text,
                 tokenCount: chunk.tokenCount,
                 dateCreated: now,
                 qdrantPointId: null // Will be updated after embedding creation

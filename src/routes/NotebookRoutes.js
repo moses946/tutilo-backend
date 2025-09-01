@@ -64,7 +64,14 @@ async function handleNotebookCreation(req, res){
             // Create chunk documents in Firestore
             const chunkRefs = await createChunksQuery(chunks, materialRef);
             console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.id}`);
-            
+            const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
+            const chunkItems = chunks.map((chunk, index)=>{
+                const chunkRef = chunkRefs[index];
+                const chunkPath = chunkRef.id;
+                return {...chunk, name: chunkPath};
+            })
+            await handleBulkChunkUpload(chunkItems, chunkBasePath);
+
             // Step 5: Create embeddings and store in Qdrant
             const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs);
             console.log(`Created embeddings and stored ${qdrantPointIds.length} points in Qdrant`);
@@ -90,14 +97,14 @@ async function handleNotebookCreation(req, res){
         await updateNotebookWithMaterials(notebookRef, materialRefs);
         console.log('Updated notebook with material references');
         
-        // Step 8: Upload chunks as JSON blobs to storage (keeping existing functionality)
-        const chunkItems = [];
-        for(const file of files){
-            const extracts = await extractPdfText(file.buffer);
-            chunkItems.push({ name: file.originalname || file.name, chunks: extracts });
-        }
-        const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
-        const uploadedChunks = await handleBulkChunkUpload(chunkItems, chunkBasePath);
+        // // Step 8: Upload chunks as JSON blobs to storage (keeping existing functionality)
+        // const chunkItems = [];
+        // for(const file of files){
+        //     const extracts = await extractPdfText(file.buffer);
+        //     chunkItems.push({ name: file.originalname || file.name, chunks: extracts });
+        // }
+        // const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
+        // const uploadedChunks = await handleBulkChunkUpload(chunkItems, chunkBasePath);
         
         // Step 9: Return success response with all created references
         res.status(201).json({
@@ -111,7 +118,7 @@ async function handleNotebookCreation(req, res){
             })),
             storageUploads: {
                 materials: uploaded,
-                chunks: uploadedChunks
+                chunks: 'uploadedChunks'
             },
             vectorDatabase: {
                 collection: 'notebook_chunks',

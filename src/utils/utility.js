@@ -91,7 +91,7 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
         const response = await ai.models.embedContent({
             model: 'gemini-embedding-exp-03-07',
             contents: texts,
-            taskType: 'RETRIEVAL_QUERY',
+            taskType: 'RETRIEVAL_DOCUMENT',
             config:{outputDimensionality: 256},
         });
         

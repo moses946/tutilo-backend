@@ -66,7 +66,7 @@ async function handleNotebookCreation(req, res){
             
             // Create chunk documents in Firestore
             const chunkRefs = await createChunksQuery(chunks, materialRef);
-            console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.id}`);
+            console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.name}`);
             const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
             const chunkItems = chunks.map((chunk, index)=>{
                 const chunkRef = chunkRefs[index];

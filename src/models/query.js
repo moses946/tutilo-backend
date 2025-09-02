@@ -1,11 +1,5 @@
 import admin, {db} from '../services/firebase.js';
 
-const docRef = await db.collection("Material").add({
-    name: "Mwenda",
-    email: "mwenda@example.com",
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
 /*
 This function executes the creation of the notebook 
 Input:notebook:obj,
@@ -190,14 +184,16 @@ export const deleteNotebookQuery = async (notebookId) => {
     const docsToDelete = [...materialRefs, ...chunkRefs];
   
     // Firestore batch limit = 500 → chunk if needed
-    const BATCH_SIZE = 500;
+    let BATCH_SIZE = 500;
     for (let i = 0; i < docsToDelete.length; i += BATCH_SIZE) {
       const batch = db.batch();
       docsToDelete.slice(i, i + BATCH_SIZE).forEach((doc) => batch.delete(doc));
+      BATCH_SIZE = Math.min(BATCH_SIZE, docsToDelete.length - i);
       await batch.commit();
     }
   
     // Finally, delete the notebook itself
     await notebookRef.delete();
+    console.log(`Notebook with ID:${notebookId} has been deleted`);
   };
   

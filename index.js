@@ -7,7 +7,7 @@ import userRouter from './src/routes/UserRoutes.js';
 import chatRouter from './src/routes/ChatRoutes.js';
 import quizRouter from './src/routes/QuizRoutes.js';
 import flashcardsRouter from './src/routes/FlashCardsRoutes.js';
-
+import cors from 'cors';
 const app = express();
 
 dotenv.config();

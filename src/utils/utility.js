@@ -150,11 +150,9 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
     }
 }
 
-export const handleNotebookUpdate = async(notebookID, materials)=>{
+export const handleNotebookUpdate = async(notebookID, materialRefs)=>{
     const notebookRef = db.collection('Notebook').doc(notebookID);
-    const materialRefs = materials.map((material)=>{
-        return db.collection('Material').doc(material.id);
-    });
+  
     await updateNotebookWithNewMaterialQuery(notebookRef, materialRefs);
     console.log('Notebook updated with new material references');
 }

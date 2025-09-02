@@ -11,10 +11,12 @@ import {
     updateChunksWithQdrantIds,
     deleteNotebookQuery
 } from '../models/query.js';
+import { bucket, db } from '../services/firebase.js';
 
 const notebookRouter = express.Router();
 notebookRouter.post('/', upload.array('files'), handleNotebookCreation);
 notebookRouter.delete('/:id', handleNotebookDeletion);
+notebookRouter.put('/:id', upload.array('files'),handleNotebookUpdate)
 notebookRouter.get('/', async (req, res)=>{
     try{
         let file = await fsp.readFile('./src/routes/notes.pdf');
@@ -141,10 +143,81 @@ async function handleNotebookDeletion(req, res){
     const {id} = req.params;
     try{
         await deleteNotebookQuery(id);
+        await bucket.deleteFiles({prefix:`notebooks/${id}/`});
+        //await bucket.deleteFiles({ prefix: `notebooks/${id}/` });
         res.json({message: 'Notebook deleted successfully'});
     }catch(err){
         console.error('Notebook deletion failed:', err);
         res.status(500).json({error: 'Notebook deletion failed'});
+    }
+}
+
+async function handleNotebookUpdate(req, res){
+    try{
+        console.log(`Received these files:${req.files}--${req.files[0].originalname}`);
+        const files = req.files;
+        const notebookID = req.params.id;
+        const notebookRef = db.collection('Notebook').doc(notebookID);
+        // upload the materials to the object store
+        const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
+        const uploaded = await handleBulkFileUpload(files, noteBookBasePath);
+        
+        //Create material documents in Firestore and get references
+        const materialRefs = await createMaterialQuery(notebookRef, files);
+        console.log('Material documents created');
+        // Step 4: Process each file into chunks and create chunk documents
+        const materialChunkMappings = [];
+        // chunking the materials
+        for(let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const materialRef = materialRefs[i];
+            
+            // Extract chunks from the file
+            const chunks = await extractPdfText(file.buffer);
+            console.log(`Extracted ${chunks.length} chunks from ${file.originalname || file.name}`);
+            
+            // Create chunk documents in Firestore
+            const chunkRefs = await createChunksQuery(chunks, materialRef);
+            console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.id}`);
+            const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
+            const chunkItems = chunks.map((chunk, index)=>{
+                const chunkRef = chunkRefs[index];
+                const chunkPath = chunkRef.id;
+                return {...chunk, name: chunkPath};
+            })
+            await handleBulkChunkUpload(chunkItems, chunkBasePath);
+
+            // Step 5: Create embeddings and store in Qdrant
+            const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs);
+            console.log(`Created embeddings and stored ${qdrantPointIds.length} points in Qdrant`);
+            
+            // Step 6: Update chunk documents with Qdrant point IDs
+            await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
+            console.log(`Updated chunk documents with Qdrant point IDs`);
+            
+            // Update material with chunk references
+            await updateMaterialWithChunks(materialRef, chunkRefs);
+            console.log(`Updated material ${materialRef.id} with chunk references`);
+            
+            materialChunkMappings.push({
+                materialId: materialRef.id,
+                materialName: file.originalname || file.name,
+                chunkCount: chunks.length,
+                chunkRefs: chunkRefs,
+                qdrantPointIds: qdrantPointIds
+            });
+        }
+        
+    
+        await updateNotebookWithMaterials(notebookRef, materialRefs);
+        console.log('Notebook updated with new material references'); 
+        res.json({materialChunkMappings})
+    }catch(err){
+        console.error('Notebook creation failed:', err);
+        res.status(500).json({
+            error: 'Notebook creation failed',
+            details: err.message
+        });
     }
 }
 

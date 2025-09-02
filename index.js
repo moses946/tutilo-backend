@@ -14,6 +14,8 @@ dotenv.config();
 var PORT = process.env.PORT
 
 
+app.use(cors());
+
 
 // Middleware
 app.use(express.json());

@@ -15,7 +15,7 @@ export const createNotebookQuery = async (notebook) => {
     let now = admin.firestore.FieldValue.serverTimestamp();
     let userRef = db.collection('User').doc(notebook.userID);
     const notebookRef = await db.collection('Notebook').add({
-        summary: notebook.summary,
+        summary: notebook.summary? notebook.summary : '',
         title: notebook.title,
         userID: userRef,
         dateCreated: now,

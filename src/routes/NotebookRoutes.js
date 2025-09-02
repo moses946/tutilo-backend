@@ -129,7 +129,7 @@ async function handleNotebookCreation(req, res){
             },
             message: 'Notebook created successfully with all materials, chunks, and embeddings processed'
         });
-        
+        console.log('Notebook created successfully with all materials, chunks, and embeddings processed');
     } catch(err) {
         console.error('Notebook creation failed:', err);
         res.status(500).json({

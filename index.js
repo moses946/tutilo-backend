@@ -31,7 +31,7 @@ app.use('/api/v1/flashcards', flashcardsRouter);
 
 // Basic route
 app.get('/', (req, res) => {
-  res.send('Hello, Express!');
+  res.send('Hello, Express!'); 
 });
 
 // Start server

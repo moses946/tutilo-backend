@@ -85,15 +85,25 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
         console.log(`Creating embeddings for ${chunks.length} chunks...`);
         
         // Extract text content from chunks
+        // Batch functionality: process up to 100 chunks per embedding request
         const texts = chunks.map(chunk => chunk.text);
-        
-        // Create embeddings using Gemini
-        const response = await ai.models.embedContent({
-            model: 'gemini-embedding-exp-03-07',
-            contents: texts,
-            taskType: 'RETRIEVAL_QUERY',
-            config:{outputDimensionality: 256},
-        });
+        let embeddingBatchSize = 100;
+        let allEmbeddings = [];
+        for (let i = 0; i < texts.length; i += embeddingBatchSize) {
+            const batchTexts = texts.slice(i, i + embeddingBatchSize);
+            embeddingBatchSize = Math.min(embeddingBatchSize, texts.length - i);
+            const response = await ai.models.embedContent({
+                model: 'gemini-embedding-exp-03-07',
+                contents: batchTexts,
+                taskType: 'RETRIEVAL_DOCUMENT',
+                config: { outputDimensionality: 256 },
+            });
+            if (response && response.embeddings) {
+                allEmbeddings = allEmbeddings.concat(response.embeddings);
+            }
+        }
+        // For downstream code compatibility, mimic the original response object
+        const response = { embeddings: allEmbeddings };
         
         console.log(`Generated ${response.embeddings.length} embeddings`);
         console.log(`Shape: ${response.embeddings[0].values.length}`)

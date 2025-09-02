@@ -12,6 +12,7 @@ import {
     deleteNotebookQuery
 } from '../models/query.js';
 import { bucket, db } from '../services/firebase.js';
+import { handleConceptMapGeneration } from '../models/models.js';
 
 const notebookRouter = express.Router();
 notebookRouter.post('/', upload.array('files'), handleNotebookCreation);
@@ -55,7 +56,8 @@ async function handleNotebookCreation(req, res){
         
         // Step 4: Process each file into chunks and create chunk documents
         const materialChunkMappings = [];
-        
+        let chunkRefsCombined = [];
+        let chunksCombined = [];
         for(let i = 0; i < files.length; i++) {
             const file = files[i];
             const materialRef = materialRefs[i];
@@ -66,7 +68,9 @@ async function handleNotebookCreation(req, res){
             
             // Create chunk documents in Firestore
             const chunkRefs = await createChunksQuery(chunks, materialRef);
-            console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.id}`);
+            chunkRefsCombined.push(...chunkRefs)
+            chunksCombined.push(...chunks)
+            console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.name}`);
             const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
             const chunkItems = chunks.map((chunk, index)=>{
                 const chunkRef = chunkRefs[index];
@@ -99,7 +103,7 @@ async function handleNotebookCreation(req, res){
         // Step 7: Update notebook with material references
         await updateNotebookWithMaterials(notebookRef, materialRefs);
         console.log('Updated notebook with material references');
-        
+        await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
         // // Step 8: Upload chunks as JSON blobs to storage (keeping existing functionality)
         // const chunkItems = [];
         // for(const file of files){

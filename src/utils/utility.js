@@ -89,7 +89,7 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
         const texts = chunks.map(chunk => chunk.text);
         let embeddingBatchSize = 100;
         let allEmbeddings = [];
-        for (let i = 0; i < texts.length; i += batchSize) {
+        for (let i = 0; i < texts.length; i += embeddingBatchSize) {
             const batchTexts = texts.slice(i, i + embeddingBatchSize);
             embeddingBatchSize = Math.min(embeddingBatchSize, texts.length - i);
             const response = await ai.models.embedContent({

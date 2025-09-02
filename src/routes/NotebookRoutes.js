@@ -8,11 +8,13 @@ import {
     createChunksQuery, 
     updateNotebookWithMaterials, 
     updateMaterialWithChunks,
-    updateChunksWithQdrantIds
+    updateChunksWithQdrantIds,
+    deleteNotebookQuery
 } from '../models/query.js';
 
 const notebookRouter = express.Router();
 notebookRouter.post('/', upload.array('files'), handleNotebookCreation);
+notebookRouter.delete('/:id', handleNotebookDeletion);
 notebookRouter.get('/', async (req, res)=>{
     try{
         let file = await fsp.readFile('./src/routes/notes.pdf');
@@ -132,6 +134,17 @@ async function handleNotebookCreation(req, res){
             error: 'Notebook creation failed',
             details: err.message
         });
+    }
+}
+
+async function handleNotebookDeletion(req, res){
+    const {id} = req.params;
+    try{
+        await deleteNotebookQuery(id);
+        res.json({message: 'Notebook deleted successfully'});
+    }catch(err){
+        console.error('Notebook deletion failed:', err);
+        res.status(500).json({error: 'Notebook deletion failed'});
     }
 }
 

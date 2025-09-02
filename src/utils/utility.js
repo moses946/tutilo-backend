@@ -1,8 +1,9 @@
 import multer from 'multer';
-import {bucket} from '../services/firebase.js';
+import {bucket, db} from '../services/firebase.js';
 import {ai} from '../models/models.js'
 import qdrantClient from '../services/qdrant.js'
 import {v4} from 'uuid'
+import { updateNotebookWithNewMaterialQuery } from '../models/query.js';
 // multer storage
 const storage = multer.memoryStorage();
 export const upload = multer({ storage });
@@ -147,4 +148,13 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
         console.error('Error in handleChunkEmbeddingAndStorage:', error);
         throw error;
     }
+}
+
+export const handleNotebookUpdate = async(notebookID, materials)=>{
+    const notebookRef = db.collection('Notebook').doc(notebookID);
+    const materialRefs = materials.map((material)=>{
+        return db.collection('Material').doc(material.id);
+    });
+    await updateNotebookWithNewMaterialQuery(notebookRef, materialRefs);
+    console.log('Notebook updated with new material references');
 }

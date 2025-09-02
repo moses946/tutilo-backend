@@ -148,3 +148,56 @@ export const updateChunksWithQdrantIds = async (chunkRefs, qdrantPointIds) => {
     await batch.commit();
     console.log(`Updated ${chunkRefs.length} chunks with Qdrant point IDs`);
 }
+
+/*
+This function updates a notebook with a new material reference
+Input: notebookRef: DocumentReference, materialRef: DocumentReference
+*/
+export const updateNotebookWithNewMaterialQuery = async (notebookRef, materialRef) => {
+    await notebookRef.update({
+        materialRefs: [...notebookRef.data().materialRefs, materialRef],
+        status: 'completed',
+        dateUpdated: admin.firestore.FieldValue.serverTimestamp()
+    });
+}
+
+// Delete a notebook and all its associated materials and chunks
+export const deleteNotebookQuery = async (notebookId) => {
+    const notebookRef = db.collection("Notebook").doc(notebookId);
+    const notebookSnap = await notebookRef.get();
+  
+    if (!notebookSnap.exists) {
+      throw new Error(`Notebook with id ${notebookId} does not exist.`);
+    }
+  
+    const { materialRefs = [] } = notebookSnap.data();
+    if (!Array.isArray(materialRefs) || materialRefs.length === 0) {
+      // No materials → just delete the notebook
+      await notebookRef.delete();
+      return;
+    }
+  
+    // materialRefs are already DocumentReferences
+    const materialSnaps = await Promise.all(materialRefs.map((ref) => ref.get()));
+  
+    // Collect all chunkRefs from materials
+    const chunkRefs = materialSnaps.flatMap((snap) => {
+      const { chunkRefs = [] } = snap.data() || {};
+      return chunkRefs; // These should also be DocumentReferences
+    });
+  
+    // Prepare all docs to delete: materials + chunks
+    const docsToDelete = [...materialRefs, ...chunkRefs];
+  
+    // Firestore batch limit = 500 → chunk if needed
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < docsToDelete.length; i += BATCH_SIZE) {
+      const batch = db.batch();
+      docsToDelete.slice(i, i + BATCH_SIZE).forEach((doc) => batch.delete(doc));
+      await batch.commit();
+    }
+  
+    // Finally, delete the notebook itself
+    await notebookRef.delete();
+  };
+  

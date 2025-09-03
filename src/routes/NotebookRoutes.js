@@ -103,7 +103,8 @@ async function handleNotebookCreation(req, res){
         // Step 7: Update notebook with material references
         await updateNotebookWithMaterials(notebookRef, materialRefs);
         console.log('Updated notebook with material references');
-        await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
+        let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
+        notebookRef.update({summary:JSON.parse(result).summary})
         // // Step 8: Upload chunks as JSON blobs to storage (keeping existing functionality)
         // const chunkItems = [];
         // for(const file of files){

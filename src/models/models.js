@@ -133,5 +133,6 @@ Response Example:
         }
     });
     console.log(response.text)
+    return response.text
 }
 

@@ -98,6 +98,16 @@ export const createChunksQuery = async (chunks, materialRef) => {
     return chunkRefs;
 }
 
+export const createConceptMapQuery = async (chunkMap, result, notebookRef) => {
+    console.log("Inside concept map query");
+    const conceptMapRef = await db.collection('ConceptMap').add({
+        notebookID:notebookRef,
+        graphData:{layout:result, progress:{}},
+        chunkMap
+    })
+    console.log(`Created concept map:${conceptMapRef}`);
+}
+
 /* 
 read queries
 */

@@ -9,7 +9,8 @@ import {
     updateMaterialWithChunks,
     updateChunksWithQdrantIds,
     deleteNotebookQuery,
-    readNotebooksQuery
+    readNotebooksQuery,
+    createConceptMapQuery
 } from '../models/query.js';
 import { bucket, db } from '../services/firebase.js';
 import { handleConceptMapGeneration } from '../models/models.js';
@@ -104,7 +105,16 @@ async function handleNotebookCreation(req, res){
         await updateNotebookWithMaterials(notebookRef, materialRefs);
         console.log('Updated notebook with material references');
         let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
-        notebookRef.update({summary:JSON.parse(result).summary})
+        result = JSON.parse(result)
+        let concepts = result.concept_map
+        let chunkConceptMap = {}
+        concepts.map((concept)=>(
+            concept.chunkIds.map((chunkId)=>{
+                chunkConceptMap[chunkId]=concept.concept
+            })
+        ))
+        await notebookRef.update({summary:result.summary})
+        await createConceptMapQuery(chunkConceptMap, result, notebookRef)
         // // Step 8: Upload chunks as JSON blobs to storage (keeping existing functionality)
         // const chunkItems = [];
         // for(const file of files){

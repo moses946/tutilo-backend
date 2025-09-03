@@ -9,8 +9,7 @@ import {
     updateMaterialWithChunks,
     updateChunksWithQdrantIds,
     deleteNotebookQuery,
-    readNotebooksQuery
-    deleteNotebookQuery,
+    readNotebooksQuery,
     updateNotebookWithFlashcards
 } from '../models/query.js';
 import { bucket, db } from '../services/firebase.js';

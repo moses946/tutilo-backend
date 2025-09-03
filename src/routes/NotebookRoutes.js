@@ -1,7 +1,6 @@
 import express from 'express';
 import {upload, handleEmbedding, handleFileUpload, handleBulkFileUpload, handleBulkChunkUpload, handleChunkEmbeddingAndStorage} from '../utils/utility.js'
 import extractPdfText from '../utils/chunking.js'
-import { promises as fsp } from 'fs';
 import { 
     createMaterialQuery, 
     createNotebookQuery, 
@@ -9,6 +8,8 @@ import {
     updateNotebookWithMaterials, 
     updateMaterialWithChunks,
     updateChunksWithQdrantIds,
+    deleteNotebookQuery,
+    readNotebooksQuery
     deleteNotebookQuery,
     updateNotebookWithFlashcards
 } from '../models/query.js';
@@ -21,13 +22,13 @@ notebookRouter.delete('/:id', handleNotebookDeletion);
 notebookRouter.put('/:id', upload.array('files'),handleNotebookUpdate)
 notebookRouter.get('/', async (req, res)=>{
     try{
-        let file = await fsp.readFile('./src/routes/notes.pdf');
-        let pages = await extractPdfText(file);
-        handleEmbedding(pages);
-        res.json(pages);
+        // change this later to use req.user
+        let userID = req.body.id;
+        let result = await readNotebooksQuery(userID);
+        res.json(result);
     }catch(err){
-        console.error('PDF parse error:', err);
-        res.status(500).json({error: 'Failed to parse PDF'});
+        console.log(`Error while fetching notebooks:${err}`);
+        res.json(err);
     }
 });
 notebookRouter.get('/:id', (req, res)=>{});
@@ -104,6 +105,8 @@ async function handleNotebookCreation(req, res){
         // Step 7: Update notebook with material references
         await updateNotebookWithMaterials(notebookRef, materialRefs);
         console.log('Updated notebook with material references');
+        let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
+        notebookRef.update({summary:JSON.parse(result).summary})
         // await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
 
 

@@ -98,6 +98,24 @@ export const createChunksQuery = async (chunks, materialRef) => {
     return chunkRefs;
 }
 
+/* 
+read queries
+*/
+export const readNotebooksQuery = async (userID) =>{
+    let userRef = db.collection('User').doc(userID);
+    // Fetch all notebooks where the userID field matches the given userID
+    let notebookRefs = await db.collection('Notebook').where('userID', '==', userRef).get();
+    const notebooks = [];
+    notebookRefs.forEach(doc => {
+        const data = doc.data();
+        notebooks.push({
+            id: doc.id,
+            ...data
+        });
+    });
+    return notebooks;
+}
+
 /*
 This function updates the notebook with material references
 Input: notebookRef: DocumentReference, materialRefs: Array of DocumentReferences

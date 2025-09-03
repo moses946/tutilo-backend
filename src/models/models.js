@@ -134,6 +134,7 @@ Response Example:
         }
     });
     console.log(response.text)
+    return response.text
 }
 
 export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef)=>{

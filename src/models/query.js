@@ -166,7 +166,17 @@ export const deleteNotebookQuery = async (notebookId) => {
   
     const { materialRefs = [] } = notebookSnap.data();
     if (!Array.isArray(materialRefs) || materialRefs.length === 0) {
-      // No materials → just delete the notebook
+      // No materials → just delete the notebook and any flashcards
+      const flashcardsSnapshot = await db.collection('Flashcard')
+          .where('notebookID', '==', notebookRef)
+          .get();
+      
+      const batch = db.batch();
+      flashcardsSnapshot.forEach(doc => batch.delete(doc.ref));
+      if (!flashcardsSnapshot.empty) {
+          await batch.commit();
+      }
+      
       await notebookRef.delete();
       return;
     }
@@ -180,8 +190,15 @@ export const deleteNotebookQuery = async (notebookId) => {
       return chunkRefs; // These should also be DocumentReferences
     });
   
-    // Prepare all docs to delete: materials + chunks
-    const docsToDelete = [...materialRefs, ...chunkRefs];
+    // Get all flashcards for this notebook (should be just one document now)
+    const flashcardsSnapshot = await db.collection('Flashcard')
+        .where('notebookID', '==', notebookRef)
+        .get();
+    
+    const flashcardRefs = flashcardsSnapshot.docs.map(doc => doc.ref);
+  
+    // Prepare all docs to delete: materials + chunks + flashcards
+    const docsToDelete = [...materialRefs, ...chunkRefs, ...flashcardRefs];
   
     // Firestore batch limit = 500 → chunk if needed
     let BATCH_SIZE = 500;
@@ -196,4 +213,35 @@ export const deleteNotebookQuery = async (notebookId) => {
     await notebookRef.delete();
     console.log(`Notebook with ID:${notebookId} has been deleted`);
   };
+
+/*
+This function creates a single flashcard document in Firestore containing all flashcards for a notebook
+Input: flashcards: Array of flashcard strings, notebookRef: DocumentReference
+*/
+export const createFlashcardsQuery = async (flashcards, notebookRef) => {
+    let now = admin.firestore.FieldValue.serverTimestamp();
+    
+    // Create a single document containing all flashcards as an array
+    const flashcardDoc = await db.collection('Flashcard').add({
+        notebookID: notebookRef,
+        flashcards: flashcards, // Array of flashcard strings
+        numberOfCards: flashcards.length,
+        dateCreated: now,
+        dateUpdated: now,
+        status: 'active'
+    });
+    
+    return flashcardDoc; // Return single document reference
+}
+
+/*
+This function updates a notebook with flashcard reference
+Input: notebookRef: DocumentReference, flashcardRef: DocumentReference
+*/
+export const updateNotebookWithFlashcards = async (notebookRef, flashcardRef) => {
+    await notebookRef.update({
+        flashcardRef: flashcardRef, // Single reference instead of array
+        dateUpdated: admin.firestore.FieldValue.serverTimestamp()
+    });
+}
   

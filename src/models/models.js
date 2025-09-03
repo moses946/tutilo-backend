@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { GoogleGenAI, Type } from "@google/genai";
+import { createFlashcardsQuery } from './query.js';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -136,3 +137,63 @@ Response Example:
     return response.text
 }
 
+export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef)=>{
+    const texts = chunkRefs.map((ref, idx) => `<chunkID: ${ref.id}>\n[${chunks[idx].text}]`).join('\n');
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        systemInstruction: `You are a helpful study assistant named Tutilo.  
+Your main task is to take in chunks of text from reference material, analyze them, and extract the most important concepts, facts, and definitions that a student would need for quick review. Convert this knowledge into concise, note-focused flashcards in bullet or short sentence form, not Q&A.  
+
+The output must always be in JSON with the following fields:  
+- "notebookName": the name of the notebook or topic.  
+- "numberOfCards": the total number of flashcards generated.  
+- "flashcards": a list of strings, each string representing one flashcard written in **notes style** (e.g., "Photosynthesis: process by which plants convert light into chemical energy").  
+
+The flashcards should:  
+- Be concise and easy to scan as refresher notes.  
+- Focus only on essential knowledge.  
+- Avoid long explanations, questions, or unnecessary detail.  
+
+Response Example: 
+{
+  "notebookName": "Biology Basics",
+  "numberOfCards": 3,
+  "flashcards": [
+    "Cell: basic structural and functional unit of life",
+    "Mitochondria: powerhouse of the cell, generates ATP",
+    "Photosynthesis: plants convert sunlight into chemical energy"
+  ]
+}
+`,
+        contents: texts,
+        responseMimeType: 'application/json',
+        responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+                notebookName: { type: Type.STRING },
+                numberOfCards: { type: Type.NUMBER },
+                flashcards: { type: Type.ARRAY, items: { type: Type.STRING } },
+            },
+        },
+        propertyOrdering: ["notebookName", "numberOfCards", "flashcards"],
+    });
+    console.log(response.text)
+    
+    // try {
+    //     const responseData = JSON.parse(response.text);
+    //     console.log('Generated flashcards:', responseData);
+        
+    //     if (responseData.flashcards && responseData.flashcards.length > 0 && notebookRef) {
+    //         // Store flashcards in Firestore
+    //         const flashcardRefs = await createFlashcardsQuery(responseData.flashcards, notebookRef);
+    //         console.log(`Stored ${flashcardRefs.length} flashcards in Firestore for notebook ${notebookRef.id}`);
+    //         return flashcardRefs;
+    //     } else {
+    //         console.log('No flashcards generated or notebook reference missing');
+    //         return [];
+    //     }
+    // } catch (error) {
+    //     console.error('Error parsing flashcard response or storing in database:', error);
+    //     return [];
+    // }
+}

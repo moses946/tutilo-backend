@@ -10,10 +10,12 @@ import {
     updateChunksWithQdrantIds,
     deleteNotebookQuery,
     readNotebooksQuery,
-    createConceptMapQuery
+    createConceptMapQuery,
+    updateNotebookWithFlashcards
+
 } from '../models/query.js';
 import { bucket, db } from '../services/firebase.js';
-import { handleConceptMapGeneration } from '../models/models.js';
+import { handleConceptMapGeneration, handleFlashcardGeneration } from '../models/models.js';
 
 const notebookRouter = express.Router();
 notebookRouter.post('/', upload.array('files'), handleNotebookCreation);
@@ -105,6 +107,7 @@ async function handleNotebookCreation(req, res){
         await updateNotebookWithMaterials(notebookRef, materialRefs);
         console.log('Updated notebook with material references');
         let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
+
         result = JSON.parse(result)
         let concepts = result.concept_map
         let chunkConceptMap = {}
@@ -115,6 +118,15 @@ async function handleNotebookCreation(req, res){
         ))
         await notebookRef.update({summary:result.summary})
         await createConceptMapQuery(chunkConceptMap, result, notebookRef)
+      
+
+
+        const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef);
+        // if (flashcardRef) {
+        //     await updateNotebookWithFlashcards(notebookRef, flashcardRef);
+        //     console.log('Updated notebook with flashcard reference');
+        // }
+
         // // Step 8: Upload chunks as JSON blobs to storage (keeping existing functionality)
         // const chunkItems = [];
         // for(const file of files){
@@ -142,9 +154,12 @@ async function handleNotebookCreation(req, res){
                 collection: 'notebook_chunks',
                 totalPoints: materialChunkMappings.reduce((sum, mapping) => sum + mapping.qdrantPointIds.length, 0)
             },
-            message: 'Notebook created successfully with all materials, chunks, and embeddings processed'
+            flashcards: {
+                generated: flashcardRef ? 1 : 0,
+                status: flashcardRef ? 'completed' : 'failed'
+            },
+            message: 'Notebook created successfully with all materials, chunks, embeddings, and flashcards processed'
         });
-        
     } catch(err) {
         console.error('Notebook creation failed:', err);
         res.status(500).json({
@@ -225,7 +240,16 @@ async function handleNotebookUpdate(req, res){
         
     
         await updateNotebookWithMaterials(notebookRef, materialRefs);
-        console.log('Notebook updated with new material references'); 
+        console.log('Updated notebook with new material references'); 
+        
+        // Generate concept map and flashcards for the new materials
+        await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
+        const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef);
+        if (flashcardRef) {
+            await updateNotebookWithFlashcards(notebookRef, flashcardRef);
+            console.log('Updated notebook with new flashcard reference');
+        }
+        
         res.json({materialChunkMappings})
     }catch(err){
         console.error('Notebook creation failed:', err);

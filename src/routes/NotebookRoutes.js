@@ -85,7 +85,7 @@ async function handleNotebookCreation(req, res){
             await handleBulkChunkUpload(chunkItems, chunkBasePath);
 
             // Step 5: Create embeddings and store in Qdrant
-            const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs);
+            const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookRef.id);
             console.log(`Created embeddings and stored ${qdrantPointIds.length} points in Qdrant`);
             
             // Step 6: Update chunk documents with Qdrant point IDs

@@ -30,7 +30,7 @@ chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
 async function handleCreateChat(req, res){
     // NOTE: MAKE SURE TO CHANGE THIS WHEN AUTH IS IMPLEMENTED
     // TODO: Replace with actual authentication middleware to set req.user
-    const notebookID = req.user && req.user.notebookID ? req.user.notebookID : 'UBcocwaIGmBCANGPyIMZ'
+    const notebookID = req.user && req.user.notebookID ? req.user.notebookID : 'OuNCbqVNBiEBZXgj1IZJ'
     let now = admin.firestore.FieldValue.serverTimestamp();
     const userId = req.user && req.user.id ? req.user.id : '7VMHj733cBO0KTSGsSPFlylJaHx1';
     const notebookRef = db.collection('Notebook').doc(notebookID);
@@ -66,7 +66,7 @@ async function handleCreateMessage(req, res){
     if(req.files){
         console.log(`Received ${req.files.length} files`);
         files = req.files;
-        let attachmentBasePath = `notebook/${data.notebookID}/chats/${chatID}`
+        let attachmentBasePath = `notebooks/${data.notebookID}/chats/${chatID}`
         files = await handleBulkFileUpload(files, attachmentBasePath);
     }
     // create a message ref and add attachements

@@ -2,6 +2,8 @@ import 'dotenv/config';
 import { GoogleGenAI, Type } from "@google/genai";
 import { createFlashcardsQuery } from './query.js';
 import { db } from '../services/firebase.js';
+import qdrantClient from '../services/qdrant.js';
+import { handleChunkRetrieval } from '../utils/utility.js';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -279,5 +281,24 @@ export const handleRunAgent = async (req, data, chatObj)=>{
   // check if retrieval is needed
   if(intentResult.retrievalNeeded){
     // pass to the retrieval component
+    let embedding = await ai.models.embedContent({
+      model: 'gemini-embedding-exp-03-07',
+      contents: [intentResult.ragQuery],
+      taskType: 'RETRIEVAL_QUERY',
+      config: { outputDimensionality: 256 },
+    });
+    // Use the embedding from the intentResult.ragQuery for vector search in Qdrant
+    // Assume embedding variable is the result of ai.models.embedContent for the query
+    // embedding.embeddings[0].values is the vector for the query
+    let queryVector = embedding.embeddings[0].values;
+    // Perform vector search in Qdrant
+    let qdrantResults = await qdrantClient.search(data.notebookID, {
+      vector: queryVector,
+      limit: 5, // You can adjust the number of results as needed
+      with_payload: true
+    });
+    console.log(qdrantResults);
+    let chunk = await handleChunkRetrieval(`notebooks/${data.notebookID}/chunks/${qdrantResults[0].payload.chunkID}.json`)
+    console.log(chunk);
   }
 }

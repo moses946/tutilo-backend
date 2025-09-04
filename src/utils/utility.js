@@ -18,7 +18,7 @@ export const handleFileUpload = async (file, path)=>{
             },
             resumable: false,
         });
-        return { path: destinationPath, name: file.originalname, size: file.size };
+        return { path: destinationPath, name: file.originalname, size: file.size, mimetype:file.mimetype};
     }catch(err){
         console.log(`Error in handleFileUpload func:${err}`);
         throw err;

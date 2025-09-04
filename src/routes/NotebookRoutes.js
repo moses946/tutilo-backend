@@ -10,10 +10,14 @@ import {
     updateChunksWithQdrantIds,
     deleteNotebookQuery,
     readNotebooksQuery,
+    createConceptMapQuery,
     updateNotebookWithFlashcards
+
 } from '../models/query.js';
 import { bucket, db } from '../services/firebase.js';
 import { handleConceptMapGeneration, handleFlashcardGeneration } from '../models/models.js';
+
+
 
 const notebookRouter = express.Router();
 notebookRouter.post('/', upload.array('files'), handleNotebookCreation);
@@ -104,8 +108,19 @@ async function handleNotebookCreation(req, res){
         // Step 7: Update notebook with material references
         await updateNotebookWithMaterials(notebookRef, materialRefs);
         console.log('Updated notebook with material references');
-        // let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
-        // notebookRef.update({summary:JSON.parse(result).summary})
+        let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
+
+        result = JSON.parse(result)
+        let concepts = result.concept_map
+        let chunkConceptMap = {}
+        concepts.map((concept)=>(
+            concept.chunkIds.map((chunkId)=>{
+                chunkConceptMap[chunkId]=concept.concept
+            })
+        ))
+        await notebookRef.update({summary:result.summary})
+        await createConceptMapQuery(chunkConceptMap, result, notebookRef)
+      
 
 
         const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef);

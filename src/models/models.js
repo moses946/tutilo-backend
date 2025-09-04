@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { GoogleGenAI, Type } from "@google/genai";
 import { createFlashcardsQuery } from './query.js';
+import { db } from '../services/firebase.js';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -204,4 +205,87 @@ Response Example:
         console.error('Error parsing flashcard response or storing in database:', error);
         return [];
     }
+}
+
+export const handleRunAgent = async (req, data, chatObj)=>{
+  // prompt intent engine
+  console.log("running agent");
+  /*
+  The prompt intent Engine needs all these
+  - notebook summary
+  - conversation history
+  - currently retrieved chunks (to prevent unneeded retrieval)  
+  */
+  let summary = (await db.collection('Notebook').doc(data.notebookID).get()).data().summary;
+  // format the files in the right way for Gemini.
+  let inlineData;
+  if(req.files){
+    console.log("Inside run Agent before creating inlineData");
+    inlineData = req.files.map((file)=>({mimeType:file.mimetype, data:Buffer.from(file.buffer).toString('base64')}));
+    inlineData = inlineData.map((data)=>({inlineData:data}));
+    console.log("Finished packaging inlineData");
+  }
+  let message = [{text:data.text}];
+  if(inlineData){
+    message = message.concat(inlineData);
+    console.log("concated text and inlinedata");
+  }
+  let response = await ai.models.generateContent({
+    model:'gemini-2.5-flash-lite',
+    contents:message,
+    config:{
+      systemInstruction:`You are a hyper-efficient Prompt Intent Engine. Your purpose is to analyze a user's prompt in the context of a conversation and determine how to process it. Your analysis must be fast and your output must be a single, clean JSON object with no additional text or explanations.
+        CONTEXT:
+        <NOTEBOOK_SUMMARY>
+        ${summary}
+        </NOTEBOOK_SUMMARY>
+        <CONVERSATION_HISTORY>
+        ${JSON.stringify(chatObj.history.slice(0, chatObj.history.length))}
+        </CONVERSATION_HISTORY>
+        <CURRENTLY_RETRIEVED_CHUNKS>
+        ${JSON.stringify(chatObj.chunks || '')}
+        </CURRENTLY_RETRIEVED_CHUNKS>
+        YOUR TASK:
+        Based on all the provided context, perform the following steps:
+        Domain Analysis: Determine if the <USER_PROMPT> is relevant to the topics described in the <NOTEBOOK_SUMMARY>.
+        Retrieval Analysis: If the prompt is in-domain, decide if new information needs to be retrieved. A prompt does not need retrieval if the answer is likely already present in the <CONVERSATION_HISTORY> or <CURRENTLY_RETRIEVED_CHUNKS>.
+        Query Formulation: If retrieval is needed, formulate a concise and self-contained rag_query. This query should be optimized for a vector database search and should incorporate necessary context from the conversation history.
+        JSON Output: Generate a single JSON object with the results of your analysis.
+        example JSON: {
+          "isInDomain": true,
+          "messageIfOutOfDomain": null,
+          "retrievalNeeded": true,
+          "ragQuery": "What is the price of RTX 4090"
+        }
+        `,
+      responseMimeType:'application/json',
+      responseSchema:{
+        type: Type.OBJECT,
+        properties:{
+          isInDomain: { type: Type.BOOLEAN },
+          messageIfOutOfDomain: { type: Type.STRING },
+          retrievalNeeded: { type: Type.BOOLEAN },
+          ragQuery: { type: Type.STRING }
+        },
+        propertyOrdering: [
+          'isInDomain',
+          'messageIfOutOfDomain',
+          'retrievalNeeded',
+          'ragQuery'
+        ]
+      }
+    }
+  })
+  console.log(response.text);
+  let intentResult = JSON.parse(response.text);
+  // To retrieve or not to retrieve
+  if(!intentResult.isInDomain && intentResult.messageIfOutOfDomain){
+    let agentResponse = {message:intentResult.messageIfOutOfDomain}
+    return agentResponse
+  }
+  console.log('Prompt is in Domain');
+  // check if retrieval is needed
+  if(intentResult.retrievalNeeded){
+    // pass to the retrieval component
+  }
 }

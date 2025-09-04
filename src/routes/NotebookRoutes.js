@@ -104,16 +104,15 @@ async function handleNotebookCreation(req, res){
         // Step 7: Update notebook with material references
         await updateNotebookWithMaterials(notebookRef, materialRefs);
         console.log('Updated notebook with material references');
-        let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
-        notebookRef.update({summary:JSON.parse(result).summary})
-        // await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
+        // let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
+        // notebookRef.update({summary:JSON.parse(result).summary})
 
 
         const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef);
-        // if (flashcardRef) {
-        //     await updateNotebookWithFlashcards(notebookRef, flashcardRef);
-        //     console.log('Updated notebook with flashcard reference');
-        // }
+        if (flashcardRef) {
+            await updateNotebookWithFlashcards(notebookRef, flashcardRef);
+            console.log('Updated notebook with flashcard reference');
+        }
 
         // // Step 8: Upload chunks as JSON blobs to storage (keeping existing functionality)
         // const chunkItems = [];

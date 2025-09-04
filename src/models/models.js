@@ -269,5 +269,15 @@ export const handleRunAgent = async (req, data, chatObj)=>{
     }
   })
   console.log(response.text);
+  let intentResult = JSON.parse(response.text);
   // To retrieve or not to retrieve
+  if(!intentResult.isInDomain && intentResult.messageIfOutOfDomain){
+    let agentResponse = {message:intentResult.messageIfOutOfDomain}
+    return agentResponse
+  }
+  console.log('Prompt is in Domain');
+  // check if retrieval is needed
+  if(intentResult.retrievalNeeded){
+    // pass to the retrieval component
+  }
 }

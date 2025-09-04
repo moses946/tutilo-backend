@@ -124,10 +124,10 @@ async function handleNotebookCreation(req, res){
 
 
         const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef);
-        // if (flashcardRef) {
-        //     await updateNotebookWithFlashcards(notebookRef, flashcardRef);
-        //     console.log('Updated notebook with flashcard reference');
-        // }
+        if (flashcardRef) {
+            await updateNotebookWithFlashcards(notebookRef, flashcardRef);
+            console.log('Updated notebook with flashcard reference');
+        }
 
         // // Step 8: Upload chunks as JSON blobs to storage (keeping existing functionality)
         // const chunkItems = [];

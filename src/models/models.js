@@ -156,6 +156,9 @@ The flashcards should:
 - Be concise and easy to scan as refresher notes.  
 - Focus only on essential knowledge.  
 - Avoid long explanations, questions, or unnecessary detail.  
+- Maximum number of flashcards: 20
+
+NOTE: Flashcards should not be questions or a quiz but in the form of just short notes or in the form of short notes ie What is an information system: This is a system used to store information.
 
 Response Example: 
 {
@@ -169,36 +172,41 @@ Response Example:
 }
 `,
         contents: texts,
+        config: {
         responseMimeType: 'application/json',
         responseSchema: {
             type: Type.OBJECT,
             properties: {
                 notebookName: { type: Type.STRING },
                 numberOfCards: { type: Type.NUMBER },
-                flashcards: { type: Type.ARRAY, items: { type: Type.STRING } },
+                flashcards: { 
+                  type: Type.ARRAY, 
+                  // minItems: 5, 
+                  maxItems: 20 ,
+                  items: { type: Type.STRING } },
             },
         },
         propertyOrdering: ["notebookName", "numberOfCards", "flashcards"],
-    });
-    console.log(response.text)
+    }});
+    console.log(response.text);
     
-    // try {
-    //     const responseData = JSON.parse(response.text);
-    //     console.log('Generated flashcards:', responseData);
+    try {
+        const responseData = JSON.parse(response.text);
+        console.log('Generated flashcards:', responseData);
         
-    //     if (responseData.flashcards && responseData.flashcards.length > 0 && notebookRef) {
-    //         // Store flashcards in Firestore
-    //         const flashcardRefs = await createFlashcardsQuery(responseData.flashcards, notebookRef);
-    //         console.log(`Stored ${flashcardRefs.length} flashcards in Firestore for notebook ${notebookRef.id}`);
-    //         return flashcardRefs;
-    //     } else {
-    //         console.log('No flashcards generated or notebook reference missing');
-    //         return [];
-    //     }
-    // } catch (error) {
-    //     console.error('Error parsing flashcard response or storing in database:', error);
-    //     return [];
-    // }
+        if (responseData.flashcards && responseData.flashcards.length > 0 && notebookRef) {
+            // Store flashcards in Firestore
+            const flashcardRefs = await createFlashcardsQuery(responseData.flashcards, notebookRef);
+            console.log(`Stored ${flashcardRefs.length} flashcards in Firestore for notebook ${notebookRef.id}`);
+            return flashcardRefs;
+        } else {
+            console.log('No flashcards generated or notebook reference missing');
+            return [];
+        }
+    } catch (error) {
+        console.error('Error parsing flashcard response or storing in database:', error);
+        return [];
+    }
 }
 
 export const handleRunAgent = async (req, data, chatObj)=>{

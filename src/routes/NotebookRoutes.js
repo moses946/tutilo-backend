@@ -17,6 +17,8 @@ import {
 import { bucket, db } from '../services/firebase.js';
 import { handleConceptMapGeneration, handleFlashcardGeneration } from '../models/models.js';
 
+
+
 const notebookRouter = express.Router();
 notebookRouter.post('/', upload.array('files'), handleNotebookCreation);
 notebookRouter.delete('/:id', handleNotebookDeletion);

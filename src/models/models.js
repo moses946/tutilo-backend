@@ -3,7 +3,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { createFlashcardsQuery } from './query.js';
 import { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
-import { handleChunkRetrieval } from '../utils/utility.js';
+import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -306,7 +306,12 @@ export const handleRunAgent = async (req, data, chatObj)=>{
       with_payload: true
     });
     console.log(qdrantResults);
-    let chunk = await handleChunkRetrieval(`notebooks/${data.notebookID}/chunks/${qdrantResults[0].payload.chunkID}.json`)
-    console.log(chunk);
+    let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
+    let chunkPaths = qdrantResults.map((result)=>(`${chunkBasePath}${result.payload.chunkID}.json`))
+    //let chunk = await handleChunkRetrieval(`notebooks/${data.notebookID}/chunks/${qdrantResults[0].payload.chunkID}.json`)
+    let chunks = await handleBulkChunkRetrieval(chunkPaths);
+    console.log(chunks);
+
+    // Add the chunks to the
   }
 }

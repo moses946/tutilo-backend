@@ -23,7 +23,7 @@ chatRouter.get('/', handleReadChats);
 chatRouter.post('/', handleCreateChat);
 chatRouter.get('/:chatID', (req, res)=>{});
 // chatRouter.get('/:chatId/messages', (req, res)=>{});
-chatRouter.post('/:chatID', upload.array('files'),handleCreateMessage);
+chatRouter.post('/:chatID/messages', upload.array('files'),handleCreateMessage);
 chatRouter.patch('/:chatID/messages/:messageId', (req, res)=>{});
 chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
 

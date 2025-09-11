@@ -59,7 +59,7 @@ async function extractPdfText(file){
         if (len < 10) return true; // extremely short
 
         // Ratio of non-alphanumeric (excluding common punctuation and whitespace)
-        const allowed = /[A-Za-z0-9\\s.,;:()\\-'/±×÷=+*^_{}\\[\\]<>∞≈≠≤≥αβγδθλπσφΩω∑∫√°]/;
+        const allowed = /[A-Za-z0-9\s.,;:()'/±×÷=+*^_{}\[\]<>∞≈≠≤≥αβγδθλπσφΩω∑∫√°\-]/;
         // const allowed = /[A-Za-z0-9\s.,;:()\-'/]/;
         let nonAlnum = 0;
         for (let i = 0; i < len; i++) {

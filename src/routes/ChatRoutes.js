@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { text } from 'express';
 import admin, { db } from '../services/firebase.js';
 import { handleRunAgent } from '../models/models.js';
 import { handleBulkFileUpload, upload } from '../utils/utility.js';
@@ -23,14 +23,14 @@ chatRouter.get('/', handleReadChats);
 chatRouter.post('/', handleCreateChat);
 chatRouter.get('/:chatID', (req, res)=>{});
 // chatRouter.get('/:chatId/messages', (req, res)=>{});
-chatRouter.post('/:chatID', upload.array('files'),handleCreateMessage);
+chatRouter.post('/:chatID/messages', upload.array('files'),handleCreateMessage);
 chatRouter.patch('/:chatID/messages/:messageId', (req, res)=>{});
 chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
 
 async function handleCreateChat(req, res){
     // NOTE: MAKE SURE TO CHANGE THIS WHEN AUTH IS IMPLEMENTED
     // TODO: Replace with actual authentication middleware to set req.user
-    const notebookID = req.user && req.user.notebookID ? req.user.notebookID : 'UBcocwaIGmBCANGPyIMZ'
+    const notebookID = req.user && req.user.notebookID ? req.user.notebookID : 'yz93Vd5YHA7TFqMI03R5'
     let now = admin.firestore.FieldValue.serverTimestamp();
     const userId = req.user && req.user.id ? req.user.id : '7VMHj733cBO0KTSGsSPFlylJaHx1';
     const notebookRef = db.collection('Notebook').doc(notebookID);
@@ -66,7 +66,7 @@ async function handleCreateMessage(req, res){
     if(req.files){
         console.log(`Received ${req.files.length} files`);
         files = req.files;
-        let attachmentBasePath = `notebook/${data.notebookID}/chats/${chatID}`
+        let attachmentBasePath = `notebooks/${data.notebookID}/chats/${chatID}`
         files = await handleBulkFileUpload(files, attachmentBasePath);
     }
     // create a message ref and add attachements
@@ -80,7 +80,7 @@ async function handleCreateMessage(req, res){
     })
     console.log('Saved the message in firestore');
     // store the history text only, Will build the attachments for Gemini from the files field in the request
-    let message = {role:'user', content:data.text};
+    let message = {role:'user', parts:[{text:data.text}]};
     // adding the message to history, because even if the AI generation fails the message will still be seen in history
     if (!chatMap[chatID]) chatMap[chatID] = { history: [] };
     if (!Array.isArray(chatMap[chatID].history)) chatMap[chatID].history = [];
@@ -90,7 +90,7 @@ async function handleCreateMessage(req, res){
     };
     console.log("updated the history before calling agent");
     // run the AI agent to get the response
-    await handleRunAgent(req, data, chatMap[chatID]);
-    res.json()
+    let result = await handleRunAgent(req, data, chatMap[chatID]);
+    res.json(result)
 
 }

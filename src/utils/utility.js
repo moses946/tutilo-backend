@@ -50,6 +50,41 @@ export const handleBulkChunkUpload = async (chunks, basePath)=>{
     });
     return Promise.all(uploads);
 }
+/*
+function to retrieve a chunk
+*/
+export const handleChunkRetrieval = async (path) => {
+    try {
+        const file = bucket.file(path);
+        const [exists] = await file.exists();
+        if (!exists) {
+            throw new Error(`Chunk file not found at path: ${path}`);
+        }
+        const [contents] = await file.download();
+        // Try to parse as JSON, fallback to string if not JSON
+        try {
+            return JSON.parse(contents.toString('utf-8'));
+        } catch (err) {
+            // Not JSON, return as string
+            return contents.toString('utf-8');
+        }
+    } catch (err) {
+        console.error(`Error retrieving chunk at ${path}:`, err);
+        throw err;
+    }
+}
+
+export const handleBulkChunkRetrieval = async (paths)=>{
+    // Given an array of storage paths, retrieve all chunk contents in parallel
+    // Returns: Array of chunk contents (parsed JSON or string)
+    try {
+        const retrievals = paths.map(path => handleChunkRetrieval(path));
+        return await Promise.all(retrievals);
+    } catch (err) {
+        console.error('Error in handleBulkChunkRetrieval:', err);
+        throw err;
+    }
+}
 
 /*
   Embedding function
@@ -66,7 +101,7 @@ export const handleEmbedding = async (pages)=>{
         {
             model:'gemini-embedding-exp-03-07',
             contents:pages,
-            taskType: 'RETRIEVAL_QUERY',
+            taskType: 'RETRIEVAL_DOCUMENT',
             outputDimensionality: 256,
         }
     );

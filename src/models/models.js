@@ -2,6 +2,8 @@ import 'dotenv/config';
 import { GoogleGenAI, Type } from "@google/genai";
 import { createFlashcardsQuery } from './query.js';
 import { db } from '../services/firebase.js';
+import qdrantClient from '../services/qdrant.js';
+import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -209,13 +211,19 @@ Response Example:
 export const handleRunAgent = async (req, data, chatObj)=>{
   // prompt intent engine
   console.log("running agent");
+  console.log(JSON.stringify(chatObj))
   /*
   The prompt intent Engine needs all these
   - notebook summary
   - conversation history
   - currently retrieved chunks (to prevent unneeded retrieval)  
   */
-  let summary = (await db.collection('Notebook').doc(data.notebookID).get()).data().summary;
+  // Ensure required structures exist on chatObj
+  chatObj.history = chatObj.history || [];
+  chatObj.chunks = chatObj.chunks || {};
+  let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
+  let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
+  console.log(summary)
   // format the files in the right way for Gemini.
   let inlineData;
   if(req.files){
@@ -229,6 +237,7 @@ export const handleRunAgent = async (req, data, chatObj)=>{
     message = message.concat(inlineData);
     console.log("concated text and inlinedata");
   }
+  message = {role:'user', parts:message};
   let response = await ai.models.generateContent({
     model:'gemini-2.5-flash-lite',
     contents:message,
@@ -239,7 +248,7 @@ export const handleRunAgent = async (req, data, chatObj)=>{
         ${summary}
         </NOTEBOOK_SUMMARY>
         <CONVERSATION_HISTORY>
-        ${JSON.stringify(chatObj.history.slice(0, chatObj.history.length))}
+        ${JSON.stringify(chatObj.history.slice(0, chatObj.history.length - 1))}
         </CONVERSATION_HISTORY>
         <CURRENTLY_RETRIEVED_CHUNKS>
         ${JSON.stringify(chatObj.chunks || '')}
@@ -247,8 +256,11 @@ export const handleRunAgent = async (req, data, chatObj)=>{
         YOUR TASK:
         Based on all the provided context, perform the following steps:
         Domain Analysis: Determine if the <USER_PROMPT> is relevant to the topics described in the <NOTEBOOK_SUMMARY>.
-        Retrieval Analysis: If the prompt is in-domain, decide if new information needs to be retrieved. A prompt does not need retrieval if the answer is likely already present in the <CONVERSATION_HISTORY> or <CURRENTLY_RETRIEVED_CHUNKS>.
+        Retrieval Analysis: If the prompt is in-domain, determine whether new information must be retrieved to answer it. 
+        Retrieval is NOT needed if the answer to the prompt can be fully found in either the <CONVERSATION_HISTORY> or <CURRENTLY_RETRIEVED_CHUNKS>.
+        Retrieval IS needed if the prompt is in-domain and the answer is NOT already present in <CONVERSATION_HISTORY> or <CURRENTLY_RETRIEVED_CHUNKS>.
         Query Formulation: If retrieval is needed, formulate a concise and self-contained rag_query. This query should be optimized for a vector database search and should incorporate necessary context from the conversation history.
+        NOTE:the ragQuery cannot be given when retrievalNeeded is false
         JSON Output: Generate a single JSON object with the results of your analysis.
         example JSON: {
           "isInDomain": true,
@@ -286,5 +298,142 @@ export const handleRunAgent = async (req, data, chatObj)=>{
   // check if retrieval is needed
   if(intentResult.retrievalNeeded){
     // pass to the retrieval component
+    let embedding = await ai.models.embedContent({
+      model: 'gemini-embedding-exp-03-07',
+      contents: [intentResult.ragQuery],
+      taskType: 'RETRIEVAL_QUERY',
+      config: { outputDimensionality: 256 },
+    });
+    // Use the embedding from the intentResult.ragQuery for vector search in Qdrant
+    // Assume embedding variable is the result of ai.models.embedContent for the query
+    // embedding.embeddings[0].values is the vector for the query
+    let queryVector = embedding.embeddings[0].values;
+    // Perform vector search in Qdrant
+    let qdrantResults = await qdrantClient.search(data.notebookID, {
+      vector: queryVector,
+      limit: 5, // You can adjust the number of results as needed
+      with_payload: true
+    });
+    console.log(qdrantResults);
+    let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
+    let chunkPaths = qdrantResults.map((result)=>(`${chunkBasePath}${result.payload.chunkID}.json`))
+    //let chunk = await handleChunkRetrieval(`notebooks/${data.notebookID}/chunks/${qdrantResults[0].payload.chunkID}.json`)
+    let chunks = await handleBulkChunkRetrieval(chunkPaths);
+    console.log(chunks);
+    // get the chunks
+
+    // Add the chunks to the chat obj
+    chunks.forEach((chunk, index)=>{
+      const chunkId = qdrantResults[index]?.payload?.chunkID;
+      if(chunkId){
+        const text = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
+        chatObj.chunks[chunkId] = text.slice(0,500);
+      }
+    })
+
   }
+
+  // Always proceed to the Agent phase (with or without new retrieval)
+  let agentPrompt = `
+    You are the Agent LLM inside Tutilo, a study companion app.
+    Your job is to take user messages, the conversation history, and currently retrieved chunks, then decide whether to:
+
+    Call a tool as per the declarations given.
+
+    Synthesize a direct text response for the user.
+
+    Rules
+
+    If a tool call is needed → output a structured tool call JSON.
+
+    If no tool call is required to answer the question then respond with text
+
+    Always cite retrieved chunks if you use them. Format citations like this:
+    'AI is a growing field <chunkID>'
+
+    Never invent chunkIDs. Only cite chunks included in <CURRENTLY_RETRIEVED_CHUNKS>.
+
+    Respect the conversation history to maintain coherence.
+
+    Keep outputs concise, clear, and helpful for learning.
+
+    Inputs
+    <CONVERSATION_HISTORY>
+    ${JSON.stringify(chatObj.history.slice(0, chatObj.history.length))}
+    </CONVERSATION_HISTORY>
+
+    <CURRENTLY_RETRIEVED_CHUNKS>
+    ${JSON.stringify(chatObj.chunks || '')}
+    </CURRENTLY_RETRIEVED_CHUNKS>
+
+    Outputs
+    If text response:
+    A direct, conversational answer with citations (if chunks are referenced).
+  `
+  let videoGenFunctionDeclaration = {
+    name: 'video_gen',
+    description: 'Generates a video for math concept explanations',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        script: {
+          type: Type.STRING,
+          description: 'python code using manim to create the explanation'
+        }
+      },
+      required: ['script']
+    }
+  };
+  let agentResponse;
+  while (true) {
+    agentResponse = await ai.models.generateContent({
+      model: 'gemini-2.5-pro',
+      contents: message,
+      config: {
+        systemInstruction: agentPrompt,
+        tools: [
+          {
+            functionDeclarations: [videoGenFunctionDeclaration]
+          }
+        ]
+      }
+    });
+
+    if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
+      const functionCall = agentResponse.functionCalls[0]; // Assuming one function call
+      console.log(`Function to call: ${functionCall.name}`);
+      console.log(`Arguments: ${JSON.stringify(functionCall.args)}`);
+      // You may want to process the function call here and update `message` accordingly
+      // For now, just return the function call as before
+      const functionResponsePart = {
+        name: functionCall.name,
+        response: {
+          result: "video has been generated",
+        },
+      }
+      chatObj.history.push({
+        role: "model",
+        parts: [
+          {
+            functionCall: functionCall,
+          },
+        ],
+      });
+      chatObj.history.push({
+        role: "user",
+        parts: [
+          {
+            functionResponse: functionResponsePart,
+          },
+        ],
+      });
+      return functionCall;
+    } else {
+      chatObj.history = [...chatObj.history, agentResponse.candidates[0].content]
+      console.log(JSON.stringify(chatObj.history));
+      break;
+    }
+  }
+  console.log(agentResponse.text)
+  return agentResponse.text
 }

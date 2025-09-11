@@ -175,7 +175,6 @@ Response Example:
         responseSchema: {
             type: Type.OBJECT,
             properties: {
-                notebookName: { type: Type.STRING },
                 numberOfCards: { type: Type.NUMBER },
                 flashcards: { 
                   type: Type.ARRAY, 
@@ -184,7 +183,7 @@ Response Example:
                   items: { type: Type.STRING } },
             },
         },
-        propertyOrdering: ["notebookName", "numberOfCards", "flashcards"],
+        propertyOrdering: ["numberOfCards", "flashcards"],
     }});
     console.log(response.text);
     

@@ -26,12 +26,23 @@ notebookRouter.put('/:id', upload.array('files'),handleNotebookUpdate)
 notebookRouter.get('/', async (req, res)=>{
     try{
         // change this later to use req.user
-        let userID = req.body.id;
+        let userID = req.query.id || req.body.id;
+        
+        if (!userID) {
+            return res.status(400).json({
+                error: 'User ID is required',
+                message: 'Please provide user ID as query parameter or in request body'
+            });
+        }
+        
         let result = await readNotebooksQuery(userID);
         res.json(result);
     }catch(err){
         console.log(`Error while fetching notebooks:${err}`);
-        res.json(err);
+        res.status(500).json({
+            error: 'Failed to fetch notebooks',
+            details: err.message
+        });
     }
 });
 notebookRouter.get('/:id', (req, res)=>{});

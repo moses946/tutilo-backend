@@ -255,19 +255,41 @@ export const handleRunAgent = async (req, data, chatObj)=>{
         </CURRENTLY_RETRIEVED_CHUNKS>
         YOUR TASK:
         Based on all the provided context, perform the following steps:
-        Domain Analysis: Determine if the <USER_PROMPT> is relevant to the topics described in the <NOTEBOOK_SUMMARY>.
-        Retrieval Analysis: If the prompt is in-domain, determine whether new information must be retrieved to answer it. 
-        Retrieval is NOT needed if the answer to the prompt can be fully found in either the <CONVERSATION_HISTORY> or <CURRENTLY_RETRIEVED_CHUNKS>.
-        Retrieval IS needed if the prompt is in-domain and the answer is NOT already present in <CONVERSATION_HISTORY> or <CURRENTLY_RETRIEVED_CHUNKS>.
-        Query Formulation: If retrieval is needed, formulate a concise and self-contained rag_query. This query should be optimized for a vector database search and should incorporate necessary context from the conversation history.
-        NOTE:the ragQuery cannot be given when retrievalNeeded is false
-        JSON Output: Generate a single JSON object with the results of your analysis.
-        example JSON: {
+
+        Domain Analysis
+
+        Determine if the <USER_PROMPT> is relevant to the topics described in the <NOTEBOOK_SUMMARY> OR connected to the ongoing <CONVERSATION_HISTORY>.
+
+        A prompt is in-domain if it directly or indirectly relates to the notebook topics, previously discussed concepts, or retrieved chunks.
+
+        Be lenient: if the user uses pronouns like “it”, “this”, “that”, “the formula”, infer the reference from the conversation history or retrieved chunks.
+
+        Retrieval Analysis
+
+        If the prompt is in-domain, determine whether new information must be retrieved.
+
+        Retrieval is NOT needed if the answer can be fully derived from <CONVERSATION_HISTORY> or <CURRENTLY_RETRIEVED_CHUNKS>.
+
+        Retrieval IS needed if the answer requires additional notebook content not currently available.
+
+        Query Formulation
+
+        If retrieval is needed, formulate a concise and self-contained ragQuery.
+
+        The query must resolve pronouns and vague references using the conversation history (e.g., turn “the formula” into “the quadratic formula” if that’s the discussed context).
+
+        The ragQuery should be optimized for vector database search.
+
+        JSON Output
+        Return a single JSON object with this structure:
+
+        {
           "isInDomain": true,
           "messageIfOutOfDomain": null,
           "retrievalNeeded": true,
-          "ragQuery": "What is the price of RTX 4090"
+          "ragQuery": "What is the quadratic formula"
         }
+
         `,
       responseMimeType:'application/json',
       responseSchema:{

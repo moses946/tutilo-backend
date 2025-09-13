@@ -30,7 +30,7 @@ chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
 async function handleCreateChat(req, res){
     // NOTE: MAKE SURE TO CHANGE THIS WHEN AUTH IS IMPLEMENTED
     // TODO: Replace with actual authentication middleware to set req.user
-    const notebookID = req.user && req.user.notebookID ? req.user.notebookID : 'yz93Vd5YHA7TFqMI03R5'
+    const notebookID = req.user && req.user.notebookID ? req.user.notebookID : 'AU9cLnEYwHgAye1ettTV'
     let now = admin.firestore.FieldValue.serverTimestamp();
     const userId = req.user && req.user.id ? req.user.id : '7VMHj733cBO0KTSGsSPFlylJaHx1';
     const notebookRef = db.collection('Notebook').doc(notebookID);

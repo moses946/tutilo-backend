@@ -16,7 +16,7 @@ import { handleBulkFileUpload, upload } from '../utils/utility.js';
     chunkID:concept
  }
 */
-var chatMap = {}
+var chatMap = new Map();
 
 const chatRouter = express.Router();
 chatRouter.get('/', handleReadChats);
@@ -70,11 +70,11 @@ async function handleCreateMessage(req, res){
         files = await handleBulkFileUpload(files, attachmentBasePath);
     }
     // create a message ref and add attachements
-    let messageRef = db.collection('Message').add({
+    let messageRef = await db.collection('Message').add({
         chatID:chatRef,
         content:data.text,
         references:[],
-        attachments:req.files?files.map((file)=>({type:file.mimetype, url:file.path})):[],
+        attachments:files?files.map((file)=>({type:file.mimetype, url:file.path})):[],
         role:'user',
         timestamp:now
     })
@@ -82,15 +82,20 @@ async function handleCreateMessage(req, res){
     // store the history text only, Will build the attachments for Gemini from the files field in the request
     let message = {role:'user', parts:[{text:data.text}]};
     // adding the message to history, because even if the AI generation fails the message will still be seen in history
-    if (!chatMap[chatID]) chatMap[chatID] = { history: [] };
-    if (!Array.isArray(chatMap[chatID].history)) chatMap[chatID].history = [];
-    chatMap[chatID] = {
-        ...chatMap[chatID],
-        history: [...chatMap[chatID].history, message]
-    };
+    if (!chatMap.has(chatID)) chatMap.set(chatID, {history:[], chunks:{}});
+    if (!Array.isArray(chatMap.get(chatID).history)){ 
+        chatMap.delete(chatID);
+        chatMap.set(chatID, {history:[], chunks:{}});
+    }
+    let obj = chatMap.get(chatID);
+    obj.history.push(message);
+    // chatMap[chatID] = {
+    //     ...chatMap[chatID],
+    //     history: [...chatMap[chatID].history, message]
+    // };
     console.log("updated the history before calling agent");
     // run the AI agent to get the response
-    let result = await handleRunAgent(req, data, chatMap[chatID]);
+    let result = await handleRunAgent(req, data, obj);
     res.json(result)
 
 }

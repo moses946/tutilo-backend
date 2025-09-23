@@ -237,7 +237,7 @@ export const handleRunAgent = async (req, data, chatObj)=>{
     message = message.concat(inlineData);
     console.log("concated text and inlinedata");
   }
-  message = {role:'user', parts:message};
+message = [{role:'user', parts:message}];
   let response = await ai.models.generateContent({
     model:'gemini-2.5-flash-lite',
     contents:message,
@@ -253,6 +253,7 @@ export const handleRunAgent = async (req, data, chatObj)=>{
         <CURRENTLY_RETRIEVED_CHUNKS>
         ${JSON.stringify(chatObj.chunks || '')}
         </CURRENTLY_RETRIEVED_CHUNKS>
+        <CUSTOM_INSTRUCTIONS>
         YOUR TASK:
         Based on all the provided context, perform the following steps:
 
@@ -271,7 +272,7 @@ export const handleRunAgent = async (req, data, chatObj)=>{
         Retrieval is NOT needed if the answer can be fully derived from <CONVERSATION_HISTORY> or <CURRENTLY_RETRIEVED_CHUNKS>.
 
         Retrieval IS needed if the answer requires additional notebook content not currently available.
-
+        The prompt is considered in-domain if it directly or indirectly requests the use of any listed tools, provided that the tool usage is relevant to the discussed concepts.
         Query Formulation
 
         If retrieval is needed, formulate a concise and self-contained ragQuery.
@@ -279,7 +280,21 @@ export const handleRunAgent = async (req, data, chatObj)=>{
         The query must resolve pronouns and vague references using the conversation history (e.g., turn “the formula” into “the quadratic formula” if that’s the discussed context).
 
         The ragQuery should be optimized for vector database search.
+        </CUSTOM_INSTRUCTIONS>
+        <TOOLS>
+        [
+          {
+            "name": "Flashcard Generator",
+            "description": "Generates flashcards from study material or user prompts."
+          },
+          {
+            "name": "video generator",
+            "description": "Creates a video to explain a concept"
+          }
+        ]
+        </TOOLS>
 
+        If the <USER_PROMPT> is directly asking to use, create, generate, or interact with any of the tools listed in <TOOLS> (by name or description), then the prompt is considered in-domain, even if it is not directly related to the <NOTEBOOK_SUMMARY> or <CONVERSATION_HISTORY>. In such cases, set "isInDomain" to true and "retrievalNeeded" to false unless the tool's operation requires additional notebook content.
         JSON Output
         Return a single JSON object with this structure:
 
@@ -449,10 +464,24 @@ export const handleRunAgent = async (req, data, chatObj)=>{
           },
         ],
       });
-      return functionCall;
+      // Update the message variable to include the function call result and call
+      let messagefunc = [
+        agentResponse.candidates[0].content,
+        {
+          role: "user",
+          parts: [
+            {
+              functionResponse: functionResponsePart,
+            },
+          ],
+        },
+      ];
+      message.push(...messagefunc)
+      // return functionCall;
     } else {
       chatObj.history = [...chatObj.history, agentResponse.candidates[0].content]
       console.log(JSON.stringify(chatObj.history));
+      // return agentResponse
       break;
     }
   }

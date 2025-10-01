@@ -48,6 +48,7 @@ notebookRouter.get('/', async (req, res)=>{
 notebookRouter.get('/:id', handleNotebookFetch);
 notebookRouter.patch('/:id', (req, res)=>{});
 notebookRouter.delete('/:id', (req, res)=>{});
+notebookRouter.get('/:id/conceptMap', handleConceptMapRetrieval);
 
 async function handleNotebookCreation(req, res){
     // Make sure there is an auth middleware that protects this route
@@ -268,6 +269,50 @@ async function handleNotebookUpdate(req, res){
         console.error('Notebook creation failed:', err);
         res.status(500).json({
             error: 'Notebook creation failed',
+            details: err.message
+        });
+    }
+}
+
+async function handleConceptMapRetrieval(req, res){
+    console.log('Retrieval of concept map')
+    try {
+        const notebookId = req.params.id;
+        if (!notebookId) {
+            return res.status(400).json({
+                error: 'Notebook ID is required',
+                message: 'Please provide a notebook ID in the URL'
+            });
+        }
+
+        // Query the conceptMap collection for the document with this notebookId
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+        const conceptMapSnapshot = await db
+            .collection('ConceptMap')
+            .where('notebookID', '==', notebookRef)
+            .limit(1)
+            .get();
+
+        if (conceptMapSnapshot.empty) {
+            return res.status(404).json({
+                error: 'Concept map not found',
+                message: `No concept map found for notebook ID: ${notebookId}`
+            });
+        }
+
+        // There should be only one concept map per notebook
+        const conceptMapDoc = conceptMapSnapshot.docs[0];
+        const conceptMapData = conceptMapDoc.data();
+
+        res.json({
+            id: conceptMapDoc.id,
+            graph:conceptMapData.graphData.layout.graph,
+            // ...conceptMapData
+        });
+    } catch (err) {
+        console.error('Error retrieving concept map:', err);
+        res.status(500).json({
+            error: 'Failed to retrieve concept map',
             details: err.message
         });
     }

@@ -45,7 +45,7 @@ notebookRouter.get('/', async (req, res)=>{
         });
     }
 });
-notebookRouter.get('/:id', (req, res)=>{});
+notebookRouter.get('/:id', handleNotebookFetch);
 notebookRouter.patch('/:id', (req, res)=>{});
 notebookRouter.delete('/:id', (req, res)=>{});
 
@@ -272,5 +272,69 @@ async function handleNotebookUpdate(req, res){
         });
     }
 }
+
+async function handleNotebookFetch(req, res) {
+    try {
+        const { id } = req.params;
+        
+        if (!id) {
+            return res.status(400).json({
+                error: 'Notebook ID is required',
+                message: 'Please provide a valid notebook ID'
+            });
+        }
+
+        // Fetch notebook data
+        const notebookRef = db.collection('Notebook').doc(id);
+        const notebookSnap = await notebookRef.get();
+
+        if (!notebookSnap.exists) {
+            return res.status(404).json({
+                error: 'Notebook not found',
+                message: 'No notebook found with the provided ID'
+            });
+        }
+
+        const notebookData = notebookSnap.data();
+        // Fetch concept map data for the notebook
+        const conceptMapSnapshot = await db.collection('ConceptMap')
+            .where('notebookID', '==', notebookRef)
+            .get();
+
+
+        let conceptMapData = null;
+        if (!conceptMapSnapshot.empty) {
+            conceptMapData = conceptMapSnapshot.docs[0].data();
+        }
+
+        // Fetch flashcards if they exist
+        const flashcardsSnapshot = await db.collection('Flashcard')
+            .where('notebookID', '==', notebookRef)
+            .get();
+
+        let flashcardsData = null;
+        if (!flashcardsSnapshot.empty) {
+            flashcardsData = flashcardsSnapshot.docs[0].data();
+        }
+
+        res.json({
+            notebook: {
+                id: notebookSnap.id,
+                ...notebookData
+            },
+            mindmap: conceptMapData,
+            flashcards: flashcardsData,
+            message: 'Notebook data retrieved successfully'
+        });
+
+    } catch (err) {
+        console.error('Failed to fetch notebook data:', err);
+        res.status(500).json({
+            error: 'Failed to fetch notebook data',
+            details: err.message
+        });
+    }
+}
+
 
 export default notebookRouter

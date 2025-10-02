@@ -30,16 +30,17 @@ chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
 async function handleCreateChat(req, res){
     // NOTE: MAKE SURE TO CHANGE THIS WHEN AUTH IS IMPLEMENTED
     // TODO: Replace with actual authentication middleware to set req.user
-    const notebookID = req.user && req.user.notebookID ? req.user.notebookID : 'FhU4MBBq8YxZpSCS0tbl'
+    const notebookID = req.body && req.body.notebookID ? req.body.notebookID : 'FhU4MBBq8YxZpSCS0tbl'
     let now = admin.firestore.FieldValue.serverTimestamp();
-    const userId = req.user && req.user.id ? req.user.id : '7VMHj733cBO0KTSGsSPFlylJaHx1';
+    const userId = req.user && req.user.uid ? req.user.uid : '7VMHj733cBO0KTSGsSPFlylJaHx1';
     const notebookRef = db.collection('Notebook').doc(notebookID);
     const userRef = db.collection('User').doc(userId);
     const chatRef = await db.collection('Chat').add({
         dateCreated:now,
         dateUpdated:now,
         notebookID:notebookRef,
-        userID:userRef
+        userID:userRef,
+        title:'Default'
     });
     res.json(chatRef);
 }
@@ -47,9 +48,9 @@ async function handleCreateChat(req, res){
 async function handleReadChats(req, res){
     // NOTE: MAKE SURE TO CHANGE THIS WHEN AUTH IS IMPLEMENTED
     // TODO: Replace with actual authentication middleware to set req.user
-    const userId = req.user && req.user.id ? req.user.id : '7VMHj733cBO0KTSGsSPFlylJaHx1';
-    const userRef = db.collection('User').doc(userId);
-    const chatsRef = db.collection('Chat').where('userID', '==', userRef).orderBy('dateUpdated').get()
+    const notebookID = req.body && req.body.notebookID ? req.body.notebookID : 'Tujqy9o16Ss4k9MiQ0uI';
+    const notebookRef = db.collection('Notebook').doc(notebookID);
+    const chatsRef = db.collection('Chat').where('notebookID', '==', notebookRef).orderBy('dateUpdated').get()
     res.json((await chatsRef).docs.map((doc)=>(doc.data())));
 }
 export default chatRouter

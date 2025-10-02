@@ -14,7 +14,7 @@ dotenv.config();
 var PORT = process.env.PORT
 
 
-app.use(cors());
+app.use(cors({origin:true}));
 
 
 // Middleware

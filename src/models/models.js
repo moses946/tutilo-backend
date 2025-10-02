@@ -4,7 +4,7 @@ import { createFlashcardsQuery } from './query.js';
 import { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
 import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
-import { conceptMapPrompt } from '../config/types.js';
+import { agentPrompt, conceptMapPrompt } from '../config/types.js';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -311,6 +311,7 @@ message = [{role:'user', parts:message}];
     // Assume embedding variable is the result of ai.models.embedContent for the query
     // embedding.embeddings[0].values is the vector for the query
     let queryVector = embedding.embeddings[0].values;
+    console.log(`Here is the notebookID:${data.notebookID}`)
     // Perform vector search in Qdrant
     let qdrantResults = await qdrantClient.search(data.notebookID, {
       vector: queryVector,
@@ -337,42 +338,7 @@ message = [{role:'user', parts:message}];
   }
 
   // Always proceed to the Agent phase (with or without new retrieval)
-  let agentPrompt = `
-    You are the Agent LLM inside Tutilo, a study companion app.
-    Your job is to take user messages, the conversation history, and currently retrieved chunks, then decide whether to:
-
-    Call a tool as per the declarations given.
-
-    Synthesize a direct text response for the user.
-
-    Rules
-
-    If a tool call is needed → output a structured tool call JSON.
-
-    If no tool call is required to answer the question then respond with text
-
-    Always cite retrieved chunks if you use them. Format citations like this:
-    'AI is a growing field <chunkID>'
-
-    Never invent chunkIDs. Only cite chunks included in <CURRENTLY_RETRIEVED_CHUNKS>.
-
-    Respect the conversation history to maintain coherence.
-
-    Keep outputs concise, clear, and helpful for learning.
-
-    Inputs
-    <CONVERSATION_HISTORY>
-    ${JSON.stringify(chatObj.history.slice(0, chatObj.history.length))}
-    </CONVERSATION_HISTORY>
-
-    <CURRENTLY_RETRIEVED_CHUNKS>
-    ${JSON.stringify(chatObj.chunks || '')}
-    </CURRENTLY_RETRIEVED_CHUNKS>
-
-    Outputs
-    If text response:
-    A direct, conversational answer with citations (if chunks are referenced).
-  `
+  let prompt = agentPrompt(chatObj);
   let videoGenFunctionDeclaration = {
     name: 'video_gen',
     description: 'Generates a video for math concept explanations',
@@ -393,7 +359,7 @@ message = [{role:'user', parts:message}];
       model: 'gemini-2.5-pro',
       contents: message,
       config: {
-        systemInstruction: agentPrompt,
+        systemInstruction: prompt,
         tools: [
           {
             functionDeclarations: [videoGenFunctionDeclaration]
@@ -452,5 +418,5 @@ message = [{role:'user', parts:message}];
     }
   }
   console.log(agentResponse.text)
-  return agentResponse.text
+  return {message:agentResponse.text}
 }

@@ -60,6 +60,7 @@ async function handleCreateMessage(req, res){
     // get the chat Id
     let now = admin.firestore.FieldValue.serverTimestamp();
     let data = req.body;
+    console.log(`Data keys:${Object.keys(data)}`)
     let chatID = req.params.chatID;
     let chatRef = db.collection('Chat').doc(chatID);
     // take the attachments and save in cloud storage

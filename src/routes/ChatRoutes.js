@@ -72,6 +72,7 @@ export default chatRouter
 
 // handle reading messages
 async function handleCreateMessage(req, res){
+    let result;
     try{// get the chat Id
         let now = admin.firestore.FieldValue.serverTimestamp();
         let data = req.body;
@@ -112,7 +113,7 @@ async function handleCreateMessage(req, res){
         // };
         console.log("updated the history before calling agent");
         // run the AI agent to get the response
-        let result = await handleRunAgent(req, data, obj);
+        result = await handleRunAgent(req, data, obj, chatRef);
         // the agent returns a JSON with {message:string}
         let aiMessageRef = await db.collection('Message').add({
             chatID:chatRef,

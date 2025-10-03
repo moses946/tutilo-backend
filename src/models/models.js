@@ -1,10 +1,10 @@
 import 'dotenv/config';
 import { GoogleGenAI, Type } from "@google/genai";
 import { createFlashcardsQuery } from './query.js';
-import { db } from '../services/firebase.js';
+import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
 import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
-import { agentPrompt, conceptMapPrompt } from '../config/types.js';
+import { agentPrompt, conceptMapPrompt, intentPrompt } from '../config/types.js';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -174,7 +174,7 @@ Response Example:
     }
 }
 
-export const handleRunAgent = async (req, data, chatObj)=>{
+export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
   // prompt intent engine
   console.log("running agent");
   console.log(JSON.stringify(chatObj))
@@ -208,70 +208,7 @@ message = [{role:'user', parts:message}];
     model:'gemini-2.5-flash-lite',
     contents:message,
     config:{
-      systemInstruction:`You are a hyper-efficient Prompt Intent Engine. Your purpose is to analyze a user's prompt in the context of a conversation and determine how to process it. Your analysis must be fast and your output must be a single, clean JSON object with no additional text or explanations.
-        CONTEXT:
-        <NOTEBOOK_SUMMARY>
-        ${summary}
-        </NOTEBOOK_SUMMARY>
-        <CONVERSATION_HISTORY>
-        ${JSON.stringify(chatObj.history.slice(0, chatObj.history.length - 1))}
-        </CONVERSATION_HISTORY>
-        <CURRENTLY_RETRIEVED_CHUNKS>
-        ${JSON.stringify(chatObj.chunks || '')}
-        </CURRENTLY_RETRIEVED_CHUNKS>
-        <CUSTOM_INSTRUCTIONS>
-        YOUR TASK:
-        Based on all the provided context, perform the following steps:
-
-        Domain Analysis
-
-        Determine if the <USER_PROMPT> is relevant to the topics described in the <NOTEBOOK_SUMMARY> OR connected to the ongoing <CONVERSATION_HISTORY>.
-
-        A prompt is in-domain if it directly or indirectly relates to the notebook topics, previously discussed concepts, or retrieved chunks.
-
-        Be lenient: if the user uses pronouns like “it”, “this”, “that”, “the formula”, infer the reference from the conversation history or retrieved chunks.
-
-        Retrieval Analysis
-
-        If the prompt is in-domain, determine whether new information must be retrieved.
-
-        Retrieval is NOT needed if the answer can be fully derived from <CONVERSATION_HISTORY> or <CURRENTLY_RETRIEVED_CHUNKS>.
-
-        Retrieval IS needed if the answer requires additional notebook content not currently available.
-        The prompt is considered in-domain if it directly or indirectly requests the use of any listed tools, provided that the tool usage is relevant to the discussed concepts.
-        Query Formulation
-
-        If retrieval is needed, formulate a concise and self-contained ragQuery.
-
-        The query must resolve pronouns and vague references using the conversation history (e.g., turn “the formula” into “the quadratic formula” if that’s the discussed context).
-
-        The ragQuery should be optimized for vector database search.
-        </CUSTOM_INSTRUCTIONS>
-        <TOOLS>
-        [
-          {
-            "name": "Flashcard Generator",
-            "description": "Generates flashcards from study material or user prompts."
-          },
-          {
-            "name": "video generator",
-            "description": "Creates a video to explain a concept"
-          }
-        ]
-        </TOOLS>
-
-        If the <USER_PROMPT> is directly asking to use, create, generate, or interact with any of the tools listed in <TOOLS> (by name or description), then the prompt is considered in-domain, even if it is not directly related to the <NOTEBOOK_SUMMARY> or <CONVERSATION_HISTORY>. In such cases, set "isInDomain" to true and "retrievalNeeded" to false unless the tool's operation requires additional notebook content.
-        JSON Output
-        Return a single JSON object with this structure:
-
-        {
-          "isInDomain": true,
-          "messageIfOutOfDomain": null,
-          "retrievalNeeded": true,
-          "ragQuery": "What is the quadratic formula"
-        }
-
-        `,
+      systemInstruction:intentPrompt(chatObj, summary),
       responseMimeType:'application/json',
       responseSchema:{
         type: Type.OBJECT,
@@ -389,18 +326,35 @@ message = [{role:'user', parts:message}];
         ],
       });
       chatObj.history.push({
-        role: "user",
+        role: "system",
         parts: [
           {
             functionResponse: functionResponsePart,
           },
         ],
       });
-      // Update the message variable to include the function call result and call
+      // save the ai response to the db
+      let aiFunctionCallRef = await db.collection('Message').add({
+        chatID:chatRef,
+        content:JSON.stringify(functionCall),
+        references:[],
+        attachments:[],
+        role:'model',
+        timestamp:admin.firestore.FieldValue.serverTimestamp()
+      })
+      let functionResponse = await db.collection('Message').add({
+        chatID:chatRef,
+        content:JSON.stringify(functionResponsePart),
+        references:[],
+        attachments:[],
+        role:'system',
+        timestamp:admin.firestore.FieldValue.serverTimestamp()
+    })
+        // Update the message variable to include the function call result and call
       let messagefunc = [
         agentResponse.candidates[0].content,
         {
-          role: "user",
+          role: "system",
           parts: [
             {
               functionResponse: functionResponsePart,

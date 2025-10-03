@@ -22,7 +22,7 @@ const chatRouter = express.Router();
 chatRouter.get('/', handleReadChats);
 chatRouter.post('/', handleCreateChat);
 chatRouter.get('/:chatID', (req, res)=>{});
-chatRouter.get('/:chatId/messages', handleReadMessages);
+chatRouter.get('/:chatID/messages', handleReadMessages);
 chatRouter.post('/:chatID/messages', upload.array('files'),handleCreateMessage);
 chatRouter.patch('/:chatID/messages/:messageId', (req, res)=>{});
 chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
@@ -157,7 +157,12 @@ async function handleReadMessages(req, res){
     })
     // add the messages to map
     let chatObj = chatMap.get(chatID);
-    chatObj.history = messages;
+    console.log(chatObj)
+    if(chatObj){
+        chatObj.history = messages;
+    }else{
+        chatMap.set(chatID, {history:messages});
+    }
     let messagesUser = messages.filter((message)=>message.role!=='system');
     res.json(messagesUser);
 }

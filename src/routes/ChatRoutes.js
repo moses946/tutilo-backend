@@ -80,46 +80,62 @@ export default chatRouter
 
 // handle reading messages
 async function handleCreateMessage(req, res){
-    // get the chat Id
-    let now = admin.firestore.FieldValue.serverTimestamp();
-    let data = req.body;
-    let chatID = req.params.chatID;
-    let chatRef = db.collection('Chat').doc(chatID);
-    // take the attachments and save in cloud storage
-    let files;
-    if(req.files){
-        console.log(`Received ${req.files.length} files`);
-        files = req.files;
-        let attachmentBasePath = `notebooks/${data.notebookID}/chats/${chatID}`
-        files = await handleBulkFileUpload(files, attachmentBasePath);
+    let result;
+    try{// get the chat Id
+        let now = admin.firestore.FieldValue.serverTimestamp();
+        let data = req.body;
+        console.log(`Data keys:${Object.keys(data)}`)
+        let chatID = req.params.chatID;
+        let chatRef = db.collection('Chat').doc(chatID);
+        // take the attachments and save in cloud storage
+        let files;
+        if(req.files){
+            console.log(`Received ${req.files.length} files`);
+            files = req.files;
+            let attachmentBasePath = `notebooks/${data.notebookID}/chats/${chatID}`
+            files = await handleBulkFileUpload(files, attachmentBasePath);
+        }
+        // create a message ref and add attachements
+        let messageRef = await db.collection('Message').add({
+            chatID:chatRef,
+            content:data.text,
+            references:[],
+            attachments:files?files.map((file)=>({type:file.mimetype, url:file.path})):[],
+            role:'user',
+            timestamp:now
+        })
+        console.log('Saved the message in firestore');
+        // store the history text only, Will build the attachments for Gemini from the files field in the request
+        let message = {role:'user', parts:[{text:data.text}]};
+        // adding the message to history, because even if the AI generation fails the message will still be seen in history
+        if (!chatMap.has(chatID)) chatMap.set(chatID, {history:[], chunks:{}});
+        if (!Array.isArray(chatMap.get(chatID).history)){ 
+            chatMap.delete(chatID);
+            chatMap.set(chatID, {history:[], chunks:{}});
+        }
+        let obj = chatMap.get(chatID);
+        obj.history.push(message);
+        // chatMap[chatID] = {
+        //     ...chatMap[chatID],
+        //     history: [...chatMap[chatID].history, message]
+        // };
+        console.log("updated the history before calling agent");
+        // run the AI agent to get the response
+        result = await handleRunAgent(req, data, obj, chatRef);
+        // the agent returns a JSON with {message:string}
+        let aiMessageRef = await db.collection('Message').add({
+            chatID:chatRef,
+            content:result.message,
+            references:[],
+            attachments:[],
+            role:'model',
+            timestamp:admin.firestore.FieldValue.serverTimestamp()
+        })
+    }catch(err){
+        console.log(`Error occurred while creating message`);
+        console.log(`ERROR:${err}`);
     }
-    // create a message ref and add attachements
-    let messageRef = await db.collection('Message').add({
-        chatID:chatRef,
-        content:data.text,
-        references:[],
-        attachments:files?files.map((file)=>({type:file.mimetype, url:file.path})):[],
-        role:'user',
-        timestamp:now
-    })
-    console.log('Saved the message in firestore');
-    // store the history text only, Will build the attachments for Gemini from the files field in the request
-    let message = {role:'user', parts:[{text:data.text}]};
-    // adding the message to history, because even if the AI generation fails the message will still be seen in history
-    if (!chatMap.has(chatID)) chatMap.set(chatID, {history:[], chunks:{}});
-    if (!Array.isArray(chatMap.get(chatID).history)){ 
-        chatMap.delete(chatID);
-        chatMap.set(chatID, {history:[], chunks:{}});
-    }
-    let obj = chatMap.get(chatID);
-    obj.history.push(message);
-    // chatMap[chatID] = {
-    //     ...chatMap[chatID],
-    //     history: [...chatMap[chatID].history, message]
-    // };
-    console.log("updated the history before calling agent");
-    // run the AI agent to get the response
-    let result = await handleRunAgent(req, data, obj);
+
     res.json(result)
 
 }

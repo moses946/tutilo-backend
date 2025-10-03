@@ -46,12 +46,35 @@ async function handleCreateChat(req, res){
 }
 
 async function handleReadChats(req, res){
-    // NOTE: MAKE SURE TO CHANGE THIS WHEN AUTH IS IMPLEMENTED
-    // TODO: Replace with actual authentication middleware to set req.user
-    const notebookID = req.body && req.body.notebookID ? req.body.notebookID : 'Tujqy9o16Ss4k9MiQ0uI';
-    const notebookRef = db.collection('Notebook').doc(notebookID);
-    const chatsRef = db.collection('Chat').where('notebookID', '==', notebookRef).orderBy('dateUpdated').get()
-    res.json((await chatsRef).docs.map((doc)=>(doc.data())));
+    try {
+        // NOTE: MAKE SURE TO CHANGE THIS WHEN AUTH IS IMPLEMENTED
+        // TODO: Replace with actual authentication middleware to set req.user
+        const notebookID = req.query && req.query.notebookID ? req.query.notebookID : 'Tujqy9o16Ss4k9MiQ0uI';
+        console.log('Fetching chats for notebookID:', notebookID);
+        
+        const notebookRef = db.collection('Notebook').doc(notebookID);
+        const chatsRef = db.collection('Chat').where('notebookID', '==', notebookRef);
+        console.log('Chats reference:', chatsRef);
+        const chatsSnapshot = await chatsRef.get();
+        
+        const chats = chatsSnapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+        
+        // Sort by dateUpdated on the client side to avoid Firestore index requirement
+        chats.sort((a, b) => {
+            const dateA = a.dateUpdated ? new Date(a.dateUpdated.seconds * 1000) : new Date(0);
+            const dateB = b.dateUpdated ? new Date(b.dateUpdated.seconds * 1000) : new Date(0);
+            return dateB - dateA; // Most recent first
+        });
+        
+        console.log('Found chats:', chats.length);
+        res.json(chats);
+    } catch (error) {
+        console.error('Error fetching chats:', error);
+        res.status(500).json({ error: 'Failed to fetch chats', message: error.message });
+    }
 }
 export default chatRouter
 

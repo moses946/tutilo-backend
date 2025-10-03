@@ -22,7 +22,7 @@ const chatRouter = express.Router();
 chatRouter.get('/', handleReadChats);
 chatRouter.post('/', handleCreateChat);
 chatRouter.get('/:chatID', (req, res)=>{});
-// chatRouter.get('/:chatId/messages', (req, res)=>{});
+chatRouter.get('/:chatId/messages', handleReadMessages);
 chatRouter.post('/:chatID/messages', upload.array('files'),handleCreateMessage);
 chatRouter.patch('/:chatID/messages/:messageId', (req, res)=>{});
 chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
@@ -90,7 +90,7 @@ async function handleCreateMessage(req, res){
         // create a message ref and add attachements
         let messageRef = await db.collection('Message').add({
             chatID:chatRef,
-            content:data.text,
+            content:JSON.stringify([{text:data.text}]),
             references:[],
             attachments:files?files.map((file)=>({type:file.mimetype, url:file.path})):[],
             role:'user',
@@ -117,7 +117,7 @@ async function handleCreateMessage(req, res){
         // the agent returns a JSON with {message:string}
         let aiMessageRef = await db.collection('Message').add({
             chatID:chatRef,
-            content:result.message,
+            content:JSON.stringify([{text:result.message}]),
             references:[],
             attachments:[],
             role:'model',
@@ -130,4 +130,26 @@ async function handleCreateMessage(req, res){
 
     res.json(result)
 
+}
+
+async function handleReadMessages(req, res){
+    console.log('Fetching messages');
+    // build cache
+    let chatID = req.params.chatID;
+    // fetch the messages related to this ID
+    let chatRef = db.collection('Chat').doc(chatID);
+    let messageRefs = await db.collection('Message').where('chatID', '==', chatRef).orderBy('timestamp').get();
+    let messages = [];
+    messageRefs.forEach((doc)=>{
+        const data = doc.data();
+        messages.push({
+            role:data.role,
+            parts:JSON.parse(data.content)
+        });
+    })
+    // add the messages to map
+    let chatObj = chatMap.get(chatID);
+    chatObj.history = messages;
+    let messagesUser = messages.filter((message)=>message.role!=='system');
+    res.json(messagesUser);
 }

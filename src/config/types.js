@@ -1,3 +1,31 @@
+export const chatNamingPrompt = (chatObj)=>{
+  let chatObjCopy = {...chatObj};
+  let template = `
+  You are an AI agent inside an AI product. Your task is to read the conversation history and generate a concise, descriptive title for the chat.
+
+  Guidelines:
+
+  The title should capture the main topic or purpose of the conversation.
+
+  Keep it short and clear (ideally under 6 words).
+
+  Avoid generic labels like “Chat” or “Conversation.”
+
+  Use title case (capitalize major words).
+
+  Input:
+
+  <CONVERSATION_HISTORY>
+  ${JSON.stringify(chatObjCopy.history)}
+  </CONVERSATION_HISTORY>
+
+
+  Output:
+  A single descriptive title.
+  `
+  return template
+}
+
 export const conceptMapPrompt = `
 # Tutilo AI Concept Map Generator - System Prompt
 
@@ -239,6 +267,7 @@ Now process the input chunks and generate the concept map.
 `;
 
 export const intentPrompt = (chatObj, summary)=>{
+  let chatObjCopy = {...chatObj};
   let template = `
   You are a hyper-efficient Prompt Intent Engine. Your purpose is to analyze a user's prompt in the context of a conversation and determine how to process it. Your analysis must be fast and your output must be a single, clean JSON object with no additional text or explanations.
         CONTEXT:
@@ -246,10 +275,10 @@ export const intentPrompt = (chatObj, summary)=>{
         ${summary}
         </NOTEBOOK_SUMMARY>
         <CONVERSATION_HISTORY>
-        ${JSON.stringify(chatObj.history.slice(0, chatObj.history.length - 1))}
+        ${JSON.stringify(chatObjCopy.history.slice(0, chatObjCopy.history.length - 1))}
         </CONVERSATION_HISTORY>
         <CURRENTLY_RETRIEVED_CHUNKS>
-        ${JSON.stringify(chatObj.chunks || '')}
+        ${JSON.stringify(chatObjCopy.chunks || '')}
         </CURRENTLY_RETRIEVED_CHUNKS>
         <CUSTOM_INSTRUCTIONS>
         YOUR TASK:
@@ -308,6 +337,7 @@ export const intentPrompt = (chatObj, summary)=>{
 }
 
 export const agentPrompt = (chatObj)=>{
+  let chatObjCopy = {...chatObj};
   let template = `
   You are Tutilo, an expert AI Study Companion. Your personality is helpful, encouraging, and precise. Your primary goal is to make learning interactive and trustworthy for the student.
 
@@ -367,11 +397,11 @@ The goal is to guide the student's understanding, not to simply dump information
 
 INPUTS
 <CONVERSATION_HISTORY>
-${JSON.stringify(chatObj.history.slice(0, chatObj.history.length))}
+${JSON.stringify(chatObjCopy.history.slice(0, chatObj.history.length))}
 </CONVERSATION_HISTORY>
 
 <CURRENTLY_RETRIEVED_CHUNKS>
-${JSON.stringify(chatObj.chunks || '')}
+${JSON.stringify(chatObjCopy.chunks || '')}
 </CURRENTLY_RETRIEVED_CHUNKS>
 
 OUTPUT INSTRUCTIONS

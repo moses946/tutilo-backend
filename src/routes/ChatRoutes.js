@@ -40,7 +40,7 @@ async function handleCreateChat(req, res){
         dateUpdated:now,
         notebookID:notebookRef,
         userID:userRef,
-        title:'Default'
+        title:'default'
     });
     res.json(chatRef);
 }
@@ -108,13 +108,18 @@ async function handleCreateMessage(req, res){
         // store the history text only, Will build the attachments for Gemini from the files field in the request
         let message = {role:'user', parts:[{text:data.text}]};
         // adding the message to history, because even if the AI generation fails the message will still be seen in history
-        if (!chatMap.has(chatID)) chatMap.set(chatID, {history:[], chunks:{}});
+        if (!chatMap.has(chatID)){ 
+            console.log('Map does not have the chatID');
+            chatMap.set(chatID, {history:[], chunks:{}})
+        };
         if (!Array.isArray(chatMap.get(chatID).history)){ 
+            console.log('history is not an array')
             chatMap.delete(chatID);
             chatMap.set(chatID, {history:[], chunks:{}});
         }
         let obj = chatMap.get(chatID);
         obj.history.push(message);
+        
         // chatMap[chatID] = {
         //     ...chatMap[chatID],
         //     history: [...chatMap[chatID].history, message]

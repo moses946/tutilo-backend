@@ -4,7 +4,8 @@ import { createFlashcardsQuery } from './query.js';
 import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
 import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
-import { agentPrompt, conceptMapPrompt, intentPrompt } from '../config/types.js';
+import { agentPrompt, chatNamingPrompt, conceptMapPrompt, intentPrompt } from '../config/types.js';
+import { text } from 'express';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -178,6 +179,33 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
   // prompt intent engine
   console.log("running agent");
   console.log(JSON.stringify(chatObj))
+  // naming the chat
+
+  if (chatObj.history.length > 2 && chatRef) {
+    // Get the document snapshot
+    const chatDoc = await chatRef.get();
+  
+    if (chatDoc.exists) {
+      const data = chatDoc.data();
+  
+      if (data.title === "default") {
+        
+        let title = await ai.models.generateContent({
+          model:'gemini-2.0-flash',
+          contents:JSON.stringify(chatObj.history),
+          config:{
+            systemInstruction:chatNamingPrompt(chatObj)
+          }
+        })
+      // Update the chatRef title field with the new title
+      if (title && title.text && typeof title.text === "string") {
+        const newTitle = title.text.trim().replace(/^"|"$/g, ''); // Remove surrounding quotes if present
+        await chatRef.update({ title: newTitle });
+        console.log(`Chat title updated to: ${newTitle}`);
+      }
+      }
+    }
+  }
   /*
   The prompt intent Engine needs all these
   - notebook summary
@@ -189,7 +217,8 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
   chatObj.chunks = chatObj.chunks || {};
   let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
   let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
-  console.log(summary)
+  console.log(JSON.stringify(chatObj.history))
+  // console.log(summary)
   // format the files in the right way for Gemini.
   let inlineData;
   if(req.files){
@@ -260,7 +289,7 @@ message = [{role:'user', parts:message}];
     let chunkPaths = qdrantResults.map((result)=>(`${chunkBasePath}${result.payload.chunkID}.json`))
     //let chunk = await handleChunkRetrieval(`notebooks/${data.notebookID}/chunks/${qdrantResults[0].payload.chunkID}.json`)
     let chunks = await handleBulkChunkRetrieval(chunkPaths);
-    console.log(chunks);
+    // console.log(chunks);
     // get the chunks
 
     // Add the chunks to the chat obj
@@ -365,12 +394,12 @@ message = [{role:'user', parts:message}];
       message.push(...messagefunc)
       // return functionCall;
     } else {
-      chatObj.history = [...chatObj.history, agentResponse.candidates[0].content]
-      console.log(JSON.stringify(chatObj.history));
+      chatObj.history = [...chatObj.history, {role:"model", parts:[{text:agentResponse.text}]}]
+      // console.log(JSON.stringify(chatObj.history));
       // return agentResponse
       break;
     }
   }
-  console.log(agentResponse.text)
+  // console.log(agentResponse.text)
   return {message:agentResponse.text}
 }

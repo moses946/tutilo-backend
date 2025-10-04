@@ -283,4 +283,17 @@ export const createMessageQuery = async (data)=>{
         timestamp:admin.firestore.FieldValue.serverTimestamp()
     })
 }
+
+// User collection related routes
+export const createUserQuery = async (data)=>{
+    let now = admin.firestore.FieldValue.serverTimestamp();
+    let userRef = await db.collection('User').add({
+        dateJoined:now,
+        email:data.email,
+        firstName:data.firstName,
+        lastName:data.lastName,
+        lastLogin:now
+    })
+    return userRef
+}
   

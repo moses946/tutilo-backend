@@ -260,6 +260,14 @@ message = [{role:'user', parts:message}];
   let intentResult = JSON.parse(response.text);
   // To retrieve or not to retrieve
   if(!intentResult.isInDomain && intentResult.messageIfOutOfDomain){
+    chatObj.history.push({
+      role: "model",
+      parts: [
+        {
+          text: intentResult.messageIfOutOfDomain,
+        },
+      ],
+    });
     let agentResponse = {message:intentResult.messageIfOutOfDomain}
     return agentResponse
   }
@@ -394,7 +402,7 @@ message = [{role:'user', parts:message}];
       message.push(...messagefunc)
       // return functionCall;
     } else {
-      chatObj.history = [...chatObj.history, {role:"model", parts:[{text:agentResponse.text}]}]
+      chatObj.history.push({role:"model", parts:[{text:agentResponse.text}]})
       // console.log(JSON.stringify(chatObj.history));
       // return agentResponse
       break;

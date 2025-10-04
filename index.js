@@ -8,6 +8,7 @@ import chatRouter from './src/routes/ChatRoutes.js';
 import quizRouter from './src/routes/QuizRoutes.js';
 import flashcardsRouter from './src/routes/FlashCardsRoutes.js';
 import cors from 'cors';
+import { authMiddleWare } from './src/middleware/authMiddleWare.js';
 const app = express();
 
 dotenv.config();
@@ -25,7 +26,7 @@ app.use('/api/v1/notebooks', notebookRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/billing', billingRouter);
 app.use('/api/v1/users', userRouter);
-app.use('/api/v1/chats', chatRouter);
+app.use('/api/v1/chats', authMiddleWare, chatRouter);
 app.use('/api/v1/quizzes', quizRouter);
 app.use('/api/v1/flashcards', flashcardsRouter);
 

@@ -10,6 +10,14 @@ export default admin;
 
 export const bucket = admin.storage().bucket();
 export const db = admin.firestore();
-
-
+export const auth = app.auth();
+export const verifyToken = async (token)=>{
+  const decoded = await auth.verifyIdToken(token);
+  if(!decoded){
+    console.log('Invalid token')
+    return null
+  }else{
+    return decoded
+  }
+}
 

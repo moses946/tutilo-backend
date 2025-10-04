@@ -272,4 +272,15 @@ export const updateNotebookWithFlashcards = async (notebookRef, flashcardRef) =>
         dateUpdated: admin.firestore.FieldValue.serverTimestamp()
     });
 }
+
+export const createMessageQuery = async (data)=>{
+    let aiMessageRef = await db.collection('Message').add({
+        chatID:data.chatRef,
+        content:JSON.stringify([{text:data.message}]),
+        references:[],
+        attachments:[],
+        role:data.role,
+        timestamp:admin.firestore.FieldValue.serverTimestamp()
+    })
+}
   

@@ -15,20 +15,30 @@ async function handleSignUp(req, res){
         let data = req.body;
         // get the token
         if(!data.token){
-            res.sendStatus(400);
+            res.status(400).json({error: 'Token is required'});
             return
         }
-        let decoded = verifyToken(data.token);
+        let decoded = await verifyToken(data.token);
         if(!decoded){
-            res.sendStatus(401);
+            res.status(401).json({error: 'Invalid token'});
             return
         }
-        data.token = decoded;
-        await createUserQuery(data);
-        res.json({message:'user created'});
+        console.log(decoded);
+        // Prepare user data for database
+        const userData = {
+            email: data.email || decoded.email,
+            firstName: data.firstName || '',
+            lastName: data.lastName || '',
+            uid: decoded.uid,
+            onboardingData: data.onboardingData || null
+        };
+        console.log(userData);
+        await createUserQuery(userData);
+        res.json({message:'user created successfully'});
     }catch(err){
         console.log(`Error while creating user`);
         console.log(`ERROR:${err}`);
+        res.status(500).json({error: 'Failed to create user'});
     }
 }
 
@@ -37,21 +47,26 @@ async function handleLogin(req, res){
         // decode the token
         let data = req.body
         if(!data.token){
-            res.sendStatus(400)
+            res.status(400).json({error: 'Token is required'});
             return
         }
-        let decoded = await verifyToken(token);
+        let decoded = await verifyToken(data.token);
         if(!decoded){
-            res.sendStatus(401);
+            res.status(401).json({error: 'Invalid token'});
             return
         }
+        
+        // Update user's last login timestamp
         let userRef = db.collection('User').doc(decoded.uid);
         await userRef.update({
             lastLogin:admin.firestore.FieldValue.serverTimestamp()
         })
+        
+        res.json({message: 'Login successful'});
     }catch(err){
         console.log('Error while logging user in');
         console.log(`ERROR:${err}`);
-        res.sendStatus(500);
+        res.status(500).json({error:'Error while logging user in'});
     }
 }
+

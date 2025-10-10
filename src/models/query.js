@@ -287,13 +287,37 @@ export const createMessageQuery = async (data)=>{
 // User collection related routes
 export const createUserQuery = async (data)=>{
     let now = admin.firestore.FieldValue.serverTimestamp();
-    let userRef = await db.collection('User').add({
+    let userRef = db.collection('User').doc(data.uid);
+    await userRef.set({
+        // Set the document ID manually using the provided uid (if available)
         dateJoined:now,
         email:data.email,
         firstName:data.firstName,
         lastName:data.lastName,
         lastLogin:now
     })
+    
+    // Create UserProfile document with user-provided data
+    const onboardingData = data.onboardingData || {};
+    const userProfileRef = await db.collection('UserProfile').add({
+        dateOfBirth: onboardingData.dateOfBirth || null,
+        educationLevel: onboardingData.educationLevel || null,
+        location: onboardingData.location || null,
+        preferences: onboardingData.preferences || {
+            appPreferences: {
+                theme: "light" // Default theme if not provided
+            }
+        },
+        profilePictureURL: data.photoURL || "",
+        streak: data.streak || {
+            count: 0, // Start with 0 streak
+            lastDate: now
+        },
+        userId: userRef // Reference to the User document
+    })
+    
+    console.log(`UserProfile created with ID: ${userProfileRef.id} for User: ${userRef.id}`);
+    
     return userRef
 }
   

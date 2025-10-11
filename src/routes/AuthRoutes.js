@@ -30,6 +30,7 @@ async function handleSignUp(req, res){
             firstName: data.firstName || '',
             lastName: data.lastName || '',
             uid: decoded.uid,
+            photoURL:data.photoURL,
             onboardingData: data.onboardingData || null
         };
         console.log(userData);

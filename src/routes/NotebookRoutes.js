@@ -1,5 +1,6 @@
 import express from 'express';
-import {upload, handleEmbedding, handleFileUpload, handleBulkFileUpload, handleBulkChunkUpload, handleChunkEmbeddingAndStorage} from '../utils/utility.js'
+import admin, { bucket, db } from '../services/firebase.js';
+import {upload, handleEmbedding, handleFileUpload, handleBulkFileUpload, handleBulkChunkUpload, handleChunkEmbeddingAndStorage, generateSignedUrl} from '../utils/utility.js'
 import extractPdfText from '../utils/chunking.js'
 import { 
     createMaterialQuery, 
@@ -14,7 +15,6 @@ import {
     updateNotebookWithFlashcards
 
 } from '../models/query.js';
-import { bucket, db } from '../services/firebase.js';
 import { handleConceptMapGeneration, handleFlashcardGeneration } from '../models/models.js';
 
 
@@ -49,6 +49,10 @@ notebookRouter.get('/:id', handleNotebookFetch);
 notebookRouter.patch('/:id', (req, res)=>{});
 notebookRouter.delete('/:id', (req, res)=>{});
 notebookRouter.get('/:id/conceptMap', handleConceptMapRetrieval);
+notebookRouter.get('/:id/concepts', handleConceptList);
+notebookRouter.get('/:id/concepts/:conceptId', handleConceptDetail);
+notebookRouter.post('/:id/concepts/:conceptId/chat', handleConceptChatCreate);
+notebookRouter.get('/:id/materials/:materialId/download', handleMaterialDownload);
 
 async function handleNotebookCreation(req, res){
     // Make sure there is an auth middleware that protects this route
@@ -315,6 +319,407 @@ async function handleConceptMapRetrieval(req, res){
             error: 'Failed to retrieve concept map',
             details: err.message
         });
+    }
+}
+
+async function fetchConceptMapDoc(notebookRef) {
+    const conceptMapSnapshot = await db
+        .collection('ConceptMap')
+        .where('notebookID', '==', notebookRef)
+        .limit(1)
+        .get();
+
+    if (conceptMapSnapshot.empty) {
+        return null;
+    }
+
+    const conceptMapDoc = conceptMapSnapshot.docs[0];
+    return {
+        doc: conceptMapDoc,
+        data: conceptMapDoc.data(),
+    };
+}
+
+const normalizeString = (value) => (value || '').toString().trim().toLowerCase();
+
+function buildConceptListing(conceptMapData) {
+    if (!conceptMapData?.graphData?.layout) {
+        return [];
+    }
+
+    const layout = conceptMapData.graphData.layout;
+    const graphNodes = layout.graph?.nodes || [];
+    const conceptEntries = layout.concept_map || [];
+
+    return graphNodes.map((node) => {
+        const conceptId = node.id;
+        const conceptName = node.data?.label || node.label || conceptId;
+        const match = conceptEntries.find(
+            (entry) => normalizeString(entry.concept) === normalizeString(conceptName)
+        );
+
+        return {
+            conceptId,
+            conceptName,
+            chunkIds: match?.chunkIds || [],
+        };
+    });
+}
+
+async function resolveConceptContext({ notebookId, conceptId }) {
+    const notebookRef = db.collection('Notebook').doc(notebookId);
+    const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
+
+    if (!conceptMapDoc) {
+        return null;
+    }
+
+    const conceptMapData = conceptMapDoc.data;
+    const layout = conceptMapData?.graphData?.layout;
+    const graphNodes = layout?.graph?.nodes || [];
+    const conceptEntries = layout?.concept_map || [];
+    const summary = layout?.summary || conceptMapData?.summary || '';
+
+    const node = graphNodes.find((n) => n.id === conceptId);
+    if (!node) {
+        return { exists: false };
+    }
+
+    const conceptName = node.data?.label || node.label || node.id;
+    const conceptEntry = conceptEntries.find(
+        (entry) => normalizeString(entry.concept) === normalizeString(conceptName)
+    );
+
+    const chunkIds = Array.isArray(conceptEntry?.chunkIds) ? conceptEntry.chunkIds : [];
+
+    const chunkSnaps = await Promise.all(
+        chunkIds.map((chunkId) => db.collection('Chunk').doc(chunkId).get())
+    );
+
+    const materialMap = new Map();
+    const chunks = [];
+
+    for (let i = 0; i < chunkSnaps.length; i++) {
+        const chunkSnap = chunkSnaps[i];
+        if (!chunkSnap.exists) {
+            continue;
+        }
+
+        const chunkId = chunkSnap.id;
+        const chunkData = chunkSnap.data();
+        const materialRef = chunkData.materialID;
+        const materialId = materialRef?.id;
+
+        if (chunkId) {
+            chunks.push({
+                chunkId,
+                materialId,
+                pageNumber: chunkData.pageNumber ?? null,
+                tokenCount: chunkData.tokenCount ?? null,
+                storagePath: chunkData.storagePath || null,
+            });
+        }
+
+        if (!materialId) {
+            continue;
+        }
+
+        if (!materialMap.has(materialId)) {
+            materialMap.set(materialId, materialRef);
+        }
+    }
+
+    const materials = [];
+
+    const appendMaterialFromRef = async (materialRef) => {
+        if (!materialRef) return;
+
+        const materialSnap = await materialRef.get();
+        if (!materialSnap.exists) {
+            return;
+        }
+
+        const materialId = materialSnap.id;
+        const materialData = materialSnap.data();
+        const storagePath = materialData.storagePath;
+        const materialName = materialData.name || storagePath || materialId;
+        const filePath = storagePath
+            ? `notebooks/${notebookId}/materials/${storagePath}`
+            : null;
+
+        materials.push({
+            materialId,
+            materialName,
+            storagePath,
+            filePath,
+        });
+    };
+
+    for (const materialRef of materialMap.values()) {
+        await appendMaterialFromRef(materialRef);
+    }
+
+    if (materials.length === 0) {
+        const notebookSnap = await notebookRef.get();
+        const notebookData = notebookSnap.data();
+        const materialRefs = Array.isArray(notebookData?.materialRefs) ? notebookData.materialRefs : [];
+
+        for (const materialRef of materialRefs) {
+            await appendMaterialFromRef(materialRef);
+        }
+    }
+
+    return {
+        exists: true,
+        conceptId,
+        conceptName,
+        chunkIds,
+        summary,
+        materials,
+        chunks,
+    };
+}
+
+async function handleConceptList(req, res) {
+    try {
+        const { id: notebookId } = req.params;
+        if (!notebookId) {
+            return res.status(400).json({
+                error: 'Notebook ID is required',
+                message: 'Please provide a valid notebook ID',
+            });
+        }
+
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+        const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
+
+        if (!conceptMapDoc) {
+            return res.status(404).json({
+                error: 'Concept map not found',
+                message: `No concept map found for notebook ID: ${notebookId}`,
+            });
+        }
+
+        const concepts = buildConceptListing(conceptMapDoc.data);
+        res.json({ concepts });
+    } catch (err) {
+        console.error('Error retrieving concept list:', err);
+        res.status(500).json({
+            error: 'Failed to retrieve concept list',
+            details: err.message,
+        });
+    }
+}
+
+async function handleConceptDetail(req, res) {
+    try {
+        const { id: notebookId, conceptId } = req.params;
+        if (!notebookId || !conceptId) {
+            return res.status(400).json({
+                error: 'Invalid request',
+                message: 'Notebook ID and concept ID are required',
+            });
+        }
+
+        const context = await resolveConceptContext({ notebookId, conceptId });
+
+        if (!context) {
+            return res.status(404).json({
+                error: 'Concept map not found',
+                message: `No concept map found for notebook ID: ${notebookId}`,
+            });
+        }
+
+        if (!context.exists) {
+            return res.status(404).json({
+                error: 'Concept not found',
+                message: `No concept node found with ID: ${conceptId}`,
+            });
+        }
+
+        res.json(context);
+    } catch (err) {
+        console.error('Error retrieving concept detail:', err);
+        res.status(500).json({
+            error: 'Failed to retrieve concept detail',
+            details: err.message,
+        });
+    }
+}
+
+async function handleConceptChatCreate(req, res) {
+    try {
+        const { id: notebookId, conceptId } = req.params;
+        if (!notebookId || !conceptId) {
+            return res.status(400).json({
+                error: 'Invalid request',
+                message: 'Notebook ID and concept ID are required',
+            });
+        }
+
+        const conceptContext = await resolveConceptContext({ notebookId, conceptId });
+
+        if (!conceptContext) {
+            return res.status(404).json({
+                error: 'Concept map not found',
+                message: `No concept map found for notebook ID: ${notebookId}`,
+            });
+        }
+
+        if (!conceptContext.exists) {
+            return res.status(404).json({
+                error: 'Concept not found',
+                message: `No concept node found with ID: ${conceptId}`,
+            });
+        }
+
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+        const now = admin.firestore.FieldValue.serverTimestamp();
+
+        const userId = req.user && req.user.uid ? req.user.uid : req.body?.userID;
+        const fallbackUserId = '7VMHj733cBO0KTSGsSPFlylJaHx1';
+        const resolvedUserId = userId || fallbackUserId;
+        const userRef = db.collection('User').doc(resolvedUserId);
+
+        const existingChatSnapshot = await db
+            .collection('Chat')
+            .where('notebookID', '==', notebookRef)
+            .where('conceptId', '==', conceptId)
+            .limit(1)
+            .get();
+
+        let chatRef;
+        const referenceMaterialsPayload = conceptContext.materials.map((material) => ({
+            materialId: material.materialId,
+            materialName: material.materialName,
+            storagePath: material.storagePath,
+            filePath: material.filePath,
+        }));
+
+        if (!existingChatSnapshot.empty) {
+            chatRef = existingChatSnapshot.docs[0].ref;
+            await chatRef.update({
+                dateUpdated: now,
+                conceptName: conceptContext.conceptName,
+                // conceptSummary: conceptContext.summary || '',
+                referenceMaterials: referenceMaterialsPayload,
+                conceptChunks: conceptContext.chunks,
+            });
+        } else {
+            const payload = {
+                dateCreated: now,
+                dateUpdated: now,
+                notebookID: notebookRef,
+                userID: userRef,
+                title: conceptContext.conceptName || 'Concept Chat',
+                conceptId,
+                conceptName: conceptContext.conceptName,
+                // conceptSummary: conceptContext.summary || '',
+                // conceptType: 'concept-map',
+                referenceMaterials: referenceMaterialsPayload,
+                conceptChunks: conceptContext.chunks,
+            };
+
+            chatRef = await db.collection('Chat').add(payload);
+        }
+
+        console.log('Concept chat reference materials:', referenceMaterialsPayload);
+
+        res.json({
+            chatId: chatRef.id,
+            conceptId,
+            conceptName: conceptContext.conceptName,
+            // conceptSummary: conceptContext.summary || '',
+            references: conceptContext.materials,
+            chunks: conceptContext.chunks,
+        });
+    } catch (err) {
+        console.error('Error creating concept chat:', err);
+        res.status(500).json({
+            error: 'Failed to create concept chat',
+            details: err.message,
+        });
+    }
+}
+
+async function handleMaterialDownload(req, res) {
+    try {
+        const { id: notebookId, materialId } = req.params;
+        if (!notebookId || !materialId) {
+            return res.status(400).json({
+                error: 'Invalid request',
+                message: 'Notebook ID and material ID are required',
+            });
+        }
+
+        const materialRef = db.collection('Material').doc(materialId);
+        const materialSnap = await materialRef.get();
+
+        if (!materialSnap.exists) {
+            return res.status(404).json({
+                error: 'Material not found',
+                message: `No material found with ID: ${materialId}`,
+            });
+        }
+
+        const materialData = materialSnap.data();
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+
+        if (!materialData.notebookID || materialData.notebookID.id !== notebookRef.id) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: 'Material does not belong to the specified notebook',
+            });
+        }
+
+        const storagePath = materialData.storagePath;
+        if (!storagePath) {
+            return res.status(400).json({
+                error: 'Storage path missing',
+                message: 'Material does not have an associated storage path',
+            });
+        }
+
+        const normalizedPath = storagePath.startsWith('notebooks/')
+            ? storagePath
+            : `notebooks/${notebookId}/materials/${storagePath}`;
+
+        const file = bucket.file(normalizedPath);
+        const [exists] = await file.exists();
+        if (!exists) {
+            return res.status(404).json({
+                error: 'File not found',
+                message: `No file found at path: ${normalizedPath}`,
+            });
+        }
+
+        const [metadata] = await file.getMetadata();
+        const contentType = metadata?.contentType || 'application/octet-stream';
+        const fileName = materialData.name || metadata?.name || storagePath;
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
+
+        const stream = file.createReadStream();
+        stream.on('error', (error) => {
+            console.error('Error streaming material file:', error);
+            if (!res.headersSent) {
+                res.status(500).json({
+                    error: 'Failed to stream material',
+                    message: error.message,
+                });
+            }
+        });
+
+        stream.pipe(res);
+    } catch (err) {
+        console.error('Error downloading material:', err);
+        if (!res.headersSent) {
+            res.status(500).json({
+                error: 'Failed to download material',
+                details: err.message,
+            });
+        }
     }
 }
 

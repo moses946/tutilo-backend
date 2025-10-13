@@ -28,21 +28,33 @@ chatRouter.patch('/:chatID/messages/:messageId', (req, res)=>{});
 chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
 
 async function handleCreateChat(req, res){
-    // NOTE: MAKE SURE TO CHANGE THIS WHEN AUTH IS IMPLEMENTED
-    // TODO: Replace with actual authentication middleware to set req.user
-    const notebookID = req.body && req.body.notebookID ? req.body.notebookID : 'FhU4MBBq8YxZpSCS0tbl'
-    let now = admin.firestore.FieldValue.serverTimestamp();
-    const userId = req.user && req.user.uid ? req.user.uid : '7VMHj733cBO0KTSGsSPFlylJaHx1';
-    const notebookRef = db.collection('Notebook').doc(notebookID);
-    const userRef = db.collection('User').doc(userId);
-    const chatRef = await db.collection('Chat').add({
-        dateCreated:now,
-        dateUpdated:now,
-        notebookID:notebookRef,
-        userID:userRef,
-        title:'default'
-    });
-    res.json(chatRef);
+    try {
+        const notebookID = req.body && req.body.notebookID ? req.body.notebookID : req.query?.notebookID;
+        if (!notebookID) {
+            return res.status(400).json({
+                error: 'Notebook ID is required',
+                message: 'Please provide notebookID in the body or query parameters',
+            });
+        }
+
+        let now = admin.firestore.FieldValue.serverTimestamp();
+        const userId = req.user && req.user.uid ? req.user.uid : '7VMHj733cBO0KTSGsSPFlylJaHx1';
+        const notebookRef = db.collection('Notebook').doc(notebookID);
+        const userRef = db.collection('User').doc(userId);
+        const chatRef = await db.collection('Chat').add({
+            dateCreated: now,
+            dateUpdated: now,
+            notebookID: notebookRef,
+            userID: userRef,
+            title: 'default',
+        });
+
+        const createdChat = await chatRef.get();
+        res.json({ id: chatRef.id, ...createdChat.data() });
+    } catch (error) {
+        console.error('Error creating chat:', error);
+        res.status(500).json({ error: 'Failed to create chat', message: error.message });
+    }
 }
 
 async function handleReadChats(req, res){
@@ -50,24 +62,17 @@ async function handleReadChats(req, res){
         // NOTE: MAKE SURE TO CHANGE THIS WHEN AUTH IS IMPLEMENTED
         // TODO: Replace with actual authentication middleware to set req.user
         const notebookID = req.query && req.query.notebookID ? req.query.notebookID : 'Tujqy9o16Ss4k9MiQ0uI';
-        console.log('Fetching chats for notebookID:', notebookID);
         
         const notebookRef = db.collection('Notebook').doc(notebookID);
-        const chatsRef = db.collection('Chat').where('notebookID', '==', notebookRef);
-        console.log('Chats reference:', chatsRef);
+        const chatsRef = db.collection('Chat')
+            .where('notebookID', '==', notebookRef)
+            .orderBy('dateUpdated', 'desc');
         const chatsSnapshot = await chatsRef.get();
         
         const chats = chatsSnapshot.docs.map((doc) => ({
             id: doc.id,
             ...doc.data()
         }));
-        
-        // Sort by dateUpdated on the client side to avoid Firestore index requirement
-        chats.sort((a, b) => {
-            const dateA = a.dateUpdated ? new Date(a.dateUpdated.seconds * 1000) : new Date(0);
-            const dateB = b.dateUpdated ? new Date(b.dateUpdated.seconds * 1000) : new Date(0);
-            return dateB - dateA; // Most recent first
-        });
         
         console.log('Found chats:', chats.length);
         res.json(chats);

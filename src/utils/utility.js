@@ -86,6 +86,26 @@ export const handleBulkChunkRetrieval = async (paths)=>{
     }
 }
 
+export const generateSignedUrl = async (path, expiresInSeconds = 3600) => {
+    try {
+        const file = bucket.file(path);
+        const [exists] = await file.exists();
+        if (!exists) {
+            throw new Error(`File not found at path: ${path}`);
+        }
+
+        const [url] = await file.getSignedUrl({
+            action: 'read',
+            expires: Date.now() + expiresInSeconds * 1000,
+        });
+
+        return url;
+    } catch (err) {
+        console.error(`Error generating signed URL for ${path}:`, err);
+        throw err;
+    }
+}
+
 /*
   Embedding function
   Input:array of objects holding page number and text content

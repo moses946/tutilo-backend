@@ -669,6 +669,11 @@ Multi-head attention allows a model to focus on different parts of an input sequ
 - If the user's request requires an external action (e.g., creating flashcards, generating a video), respond with ONLY the valid JSON for the tool call.
 - Do not add any other text or explanation.
 
+###Code Formatting Guidelines
+- Always format code according to the syntax and style conventions of the language being used.
+- Use proper indentation
+- Maintain consistent spacing around operators and after commas.
+
 **Example of a Tool Call Response:**
 {
   "tool": "Flashcard Generator",

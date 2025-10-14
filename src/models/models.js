@@ -317,14 +317,18 @@ message = [{role:'user', parts:message}];
     name: 'video_gen',
     description: 'Generates a video for math concept explanations',
     parameters: {
-      type: Type.OBJECT,
-      properties: {
-        script: {
-          type: Type.STRING,
-          description: 'python code using manim to create the explanation'
-        }
-      },
-      required: ['script']
+        type: Type.OBJECT,
+        properties:{
+          className:{
+            type:Type.STRING,
+            description:'The name of the class to be passed to manim command to render the scene'
+          },
+          code:{
+            type:Type.STRING,
+            description:'The manim code written in python, properly formatted obeying Python syntax'
+          },
+        },
+        required:['className', 'code']       
     }
   };
   let agentResponse;
@@ -345,7 +349,7 @@ message = [{role:'user', parts:message}];
     if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
       const functionCall = agentResponse.functionCalls[0]; // Assuming one function call
       console.log(`Function to call: ${functionCall.name}`);
-      console.log(`Arguments: ${JSON.stringify(functionCall.args)}`);
+      console.log(`Arguments: ${functionCall.args.code}`);
       // You may want to process the function call here and update `message` accordingly
       // For now, just return the function call as before
       const functionResponsePart = {

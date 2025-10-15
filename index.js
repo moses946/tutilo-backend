@@ -9,6 +9,7 @@ import quizRouter from './src/routes/QuizRoutes.js';
 import flashcardsRouter from './src/routes/FlashCardsRoutes.js';
 import cors from 'cors';
 import { authMiddleWare } from './src/middleware/authMiddleWare.js';
+import webhookRouter from './src/routes/Webhooks.js';
 const app = express();
 
 dotenv.config();
@@ -29,6 +30,7 @@ app.use('/api/v1/users', userRouter);
 app.use('/api/v1/chats', authMiddleWare, chatRouter);
 app.use('/api/v1/quizzes', quizRouter);
 app.use('/api/v1/flashcards', flashcardsRouter);
+app.use('/api/v1/webhooks', webhookRouter)
 
 
 
@@ -38,6 +40,6 @@ app.get('/', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running at http://localhost:${PORT}`);
 });

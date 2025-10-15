@@ -352,6 +352,22 @@ message = [{role:'user', parts:message}];
       console.log(`Arguments: ${functionCall.args.code}`);
       // You may want to process the function call here and update `message` accordingly
       // For now, just return the function call as before
+      // Send the functionCall to http://172.30.182.137:8000
+      try {
+        const response = await fetch('http://172.30.182.137:8000/render', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(functionCall.args)
+        });
+        if (!response.ok) {
+          console.error("Error sending function call to video gen server:", response.status, response.statusText);
+        } else {
+          const data = await response.json();
+          console.log("Video generation server responded:", data);
+        }
+      } catch (err) {
+        console.error("Failed to send function call to video gen server:", err);
+      }
       const functionResponsePart = {
         name: functionCall.name,
         response: {

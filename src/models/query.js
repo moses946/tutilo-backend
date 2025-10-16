@@ -15,7 +15,9 @@ export const createNotebookQuery = async (notebook) => {
         dateCreated: now,
         dateUpdated: now,
         materialRefs: [], // Will be populated with material references
-        status: 'processing'
+        status: 'processing',
+        links: Array.isArray(notebook.links) ? notebook.links : [],
+        texts: Array.isArray(notebook.texts) ? notebook.texts : []
     });
     return notebookRef
 }
@@ -136,6 +138,46 @@ export const updateNotebookWithMaterials = async (notebookRef, materialRefs) => 
         status: 'completed',
         dateUpdated: admin.firestore.FieldValue.serverTimestamp()
     });
+}
+
+export const updateNotebookMetadata = async (notebookRef, data = {}) => {
+    const payload = {
+        dateUpdated: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (typeof data.title === 'string') {
+        payload.title = data.title;
+    }
+
+    if (Array.isArray(data.links)) {
+        payload.links = data.links;
+    }
+
+    if (Array.isArray(data.texts)) {
+        payload.texts = data.texts;
+    }
+
+    await notebookRef.update(payload);
+}
+
+export const removeMaterialFromNotebook = async (notebookRef, materialId) => {
+    const notebookSnap = await notebookRef.get();
+    if (!notebookSnap.exists) {
+        throw new Error('Notebook not found');
+    }
+
+    const data = notebookSnap.data();
+    const materialRefs = Array.isArray(data.materialRefs) ? data.materialRefs : [];
+    const materialDocRef = db.collection('Material').doc(materialId);
+
+    const filtered = materialRefs.filter((ref) => ref.id !== materialId);
+
+    await notebookRef.update({
+        materialRefs: filtered,
+        dateUpdated: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    await materialDocRef.delete();
 }
 
 /*

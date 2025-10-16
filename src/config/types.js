@@ -498,7 +498,7 @@ Follow these steps in order:
 
 ---
 # OUTPUT_FORMAT
-Your entire output MUST be a single, raw JSON object with the following structure. Provide no other text or explanation.
+Your entire output MUST be a single, raw JSON object with the following structure. NOTE:Provide no other text or explanation!
 
 {
   "isInDomain": boolean,
@@ -661,6 +661,7 @@ ${JSON.stringify(retrievedChunks)}
 - If the user's request can be answered using the retrieved chunks, provide a direct text response.
 - Follow all directives for grounding and citation.
 - Your output should be only the raw text response for the user.
+- Do not hallucinate your own user messages. You are part of the system, do not refer to actions taken by the system in third person.
 
 **Example of a Perfect Text Response:**
 Multi-head attention allows a model to focus on different parts of an input sequence at the same time by running the attention mechanism in parallel <chunk42>. The outputs from these parallel layers are then combined and transformed to create the final result <chunk45>. This helps the model capture a richer understanding of the context.

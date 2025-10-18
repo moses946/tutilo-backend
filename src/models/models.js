@@ -259,6 +259,7 @@ message = [{role:'user', parts:message}];
   })
   console.log(response.text);
   let intentResult = JSON.parse(response.text);
+  var aiMessageRef = db.collection('Message').doc()
   // To retrieve or not to retrieve
   if(!intentResult.isInDomain && intentResult.messageIfOutOfDomain){
     chatObj.history.push({
@@ -269,6 +270,14 @@ message = [{role:'user', parts:message}];
         },
       ],
     });
+    aiMessageRef.set({
+      chatID:chatRef,
+      content:JSON.stringify([{text:intentResult.messageIfOutOfDomain}]),
+      references:[],
+      attachments:[],
+      role:'model',
+      timestamp:admin.firestore.FieldValue.serverTimestamp()
+    })
     let agentResponse = {message:intentResult.messageIfOutOfDomain}
     return agentResponse
   }
@@ -346,7 +355,7 @@ message = [{role:'user', parts:message}];
         ]
       }
     });
-
+    
     if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
       const functionCall = agentResponse.functionCalls[0]; // Assuming one function call
       console.log(`Function to call: ${functionCall.name}`);
@@ -359,7 +368,7 @@ message = [{role:'user', parts:message}];
         const response = await fetch('http://172.30.182.137:8000/render', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({...functionCall.args, userID:req.user.uid})
+          body: JSON.stringify({...functionCall.args, userID:req.user.uid, messageID:aiMessageRef.id})
         });
         if (!response.ok) {
           functionResponsePart = {
@@ -444,5 +453,14 @@ message = [{role:'user', parts:message}];
     }
   }
   // console.log(agentResponse.text)
+  // save to db
+  aiMessageRef.set({
+    chatID:chatRef,
+    content:JSON.stringify([{text:agentResponse.text}]),
+    references:[],
+    attachments:[],
+    role:'model',
+    timestamp:admin.firestore.FieldValue.serverTimestamp()
+  })
   return {message:agentResponse.text, media:isMedia}
 }

@@ -120,7 +120,7 @@ async function handleCreateMessage(req, res){
         // run the AI agent to get the response
         result = await handleRunAgent(req, data, obj, chatRef);
         // the agent returns a JSON with {message:string}
-        createMessageQuery({chatRef, message:result.message, role:'model'})
+        // createMessageQuery({chatRef, message:result.message, role:'model'})
     }catch(err){
         console.log(`Error occurred while creating message`);
         console.log(`ERROR:${err}`);

@@ -221,6 +221,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
   // console.log(summary)
   // format the files in the right way for Gemini.
   let inlineData;
+  var isMedia;
   if(req.files){
     console.log("Inside run Agent before creating inlineData");
     inlineData = req.files.map((file)=>({mimeType:file.mimetype, data:Buffer.from(file.buffer).toString('base64')}));
@@ -258,6 +259,7 @@ message = [{role:'user', parts:message}];
   })
   console.log(response.text);
   let intentResult = JSON.parse(response.text);
+  var aiMessageRef = db.collection('Message').doc()
   // To retrieve or not to retrieve
   if(!intentResult.isInDomain && intentResult.messageIfOutOfDomain){
     chatObj.history.push({
@@ -268,6 +270,14 @@ message = [{role:'user', parts:message}];
         },
       ],
     });
+    aiMessageRef.set({
+      chatID:chatRef,
+      content:JSON.stringify([{text:intentResult.messageIfOutOfDomain}]),
+      references:[],
+      attachments:[],
+      role:'model',
+      timestamp:admin.firestore.FieldValue.serverTimestamp()
+    })
     let agentResponse = {message:intentResult.messageIfOutOfDomain}
     return agentResponse
   }
@@ -345,7 +355,7 @@ message = [{role:'user', parts:message}];
         ]
       }
     });
-
+    
     if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
       const functionCall = agentResponse.functionCalls[0]; // Assuming one function call
       console.log(`Function to call: ${functionCall.name}`);
@@ -353,26 +363,40 @@ message = [{role:'user', parts:message}];
       // You may want to process the function call here and update `message` accordingly
       // For now, just return the function call as before
       // Send the functionCall to http://172.30.182.137:8000
+      var functionResponsePart;
       try {
         const response = await fetch('http://172.30.182.137:8000/render', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(functionCall.args)
+          body: JSON.stringify({...functionCall.args, userID:req.user.uid, messageID:aiMessageRef.id})
         });
         if (!response.ok) {
+          functionResponsePart = {
+            name: functionCall.name,
+            response: {
+              result: "video generation failed, internal server error",
+            },
+          }
           console.error("Error sending function call to video gen server:", response.status, response.statusText);
         } else {
           const data = await response.json();
+          isMedia = true;
           console.log("Video generation server responded:", data);
+          functionResponsePart = {
+            name: functionCall.name,
+            response: {
+              result: "video generation has been generated",
+            },
+          }
         }
       } catch (err) {
+        functionResponsePart = {
+          name: functionCall.name,
+          response: {
+            result: `video generation failed. [ERROR]:${err}`,
+          },
+        }
         console.error("Failed to send function call to video gen server:", err);
-      }
-      const functionResponsePart = {
-        name: functionCall.name,
-        response: {
-          result: "video has been generated",
-        },
       }
       chatObj.history.push({
         role: "model",
@@ -429,5 +453,14 @@ message = [{role:'user', parts:message}];
     }
   }
   // console.log(agentResponse.text)
-  return {message:agentResponse.text}
+  // save to db
+  aiMessageRef.set({
+    chatID:chatRef,
+    content:JSON.stringify([{text:agentResponse.text}]),
+    references:[],
+    attachments:[],
+    role:'model',
+    timestamp:admin.firestore.FieldValue.serverTimestamp()
+  })
+  return {message:agentResponse.text, media:isMedia}
 }

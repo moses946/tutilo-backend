@@ -8,7 +8,7 @@ export const authMiddleWare = async(req, res, next)=>{
             res.status(401).json({error:'Invalid Authorization'});
         }
         const token = parts[1];
-        console.log(`Token:${token}`)
+        // console.log(`Token:${token}`)
         let idToken = await verifyToken(token);
         if(!idToken){
             res.status(401).json({message:'unauthorized'});

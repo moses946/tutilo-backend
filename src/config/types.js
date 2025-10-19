@@ -498,7 +498,7 @@ Follow these steps in order:
 
 ---
 # OUTPUT_FORMAT
-Your entire output MUST be a single, raw JSON object with the following structure. Provide no other text or explanation.
+Your entire output MUST be a single, raw JSON object with the following structure. NOTE:Provide no other text or explanation!
 
 {
   "isInDomain": boolean,
@@ -661,6 +661,7 @@ ${JSON.stringify(retrievedChunks)}
 - If the user's request can be answered using the retrieved chunks, provide a direct text response.
 - Follow all directives for grounding and citation.
 - Your output should be only the raw text response for the user.
+- Do not hallucinate your own user messages. You are part of the system, do not refer to actions taken by the system in third person.
 
 **Example of a Perfect Text Response:**
 Multi-head attention allows a model to focus on different parts of an input sequence at the same time by running the attention mechanism in parallel <chunk42>. The outputs from these parallel layers are then combined and transformed to create the final result <chunk45>. This helps the model capture a richer understanding of the context.
@@ -674,6 +675,67 @@ Multi-head attention allows a model to focus on different parts of an input sequ
 - Use proper indentation
 - Maintain consistent spacing around operators and after commas.
 
+###Video scene elements layout guidelines
+When generating Manim code for visual explanations, strictly follow these layout and positioning principles to prevent overlapping elements:
+
+##Scene Composition Rules
+
+Sequential Layout (Top-to-Bottom Flow):
+
+Each text or object must be positioned below the previous one with at least 0.8 to 1.0 units of vertical spacing.
+
+Example:
+
+title = Text("Newton’s Laws").to_edge(UP)
+law1 = Text("1. Object in motion...").next_to(title, DOWN, buff=0.8)
+law2 = Text("2. F = ma").next_to(law1, DOWN, buff=0.8)
+
+
+Avoid Center Overload:
+
+Do not stack multiple elements directly at the center (0, 0).
+
+Use .to_edge(UP/DOWN/LEFT/RIGHT) or .shift() to distribute items.
+
+Grouping Related Elements:
+
+If explaining a step-by-step formula or diagram, group related visuals:
+
+formula_group = VGroup(eq1, arrow, eq2).arrange(DOWN, buff=0.6).move_to(ORIGIN)
+
+
+Keep at least buff=0.6 between grouped elements.
+
+Dynamic Transitions:
+
+Use fade or write animations (FadeIn, Write, Transform) to introduce one element at a time.
+
+Always remove previous elements before new unrelated sections:
+
+self.play(FadeOut(previous_text))
+self.play(Write(next_text))
+
+
+Edge Anchoring:
+
+Use .to_edge(UP) for titles.
+
+Use .to_edge(DOWN) for conclusions.
+
+Place formulas and diagrams around the center area with buff spacing.
+
+Scene Width Control:
+
+When showing multiple lines of text, use smaller font sizes or wrap text:
+
+Text("Long text here...", t2c={"important": YELLOW}, font_size=28)
+
+
+Final Layout Check:
+
+Every visible object in the scene must have a unique position — no two elements share identical coordinates.
+
+Maintain visual balance: center the main topic, offset details symmetrically.
 **Example of a Tool Call Response:**
 {
   "tool": "Flashcard Generator",

@@ -10,11 +10,60 @@ import flashcardsRouter from './src/routes/FlashCardsRoutes.js';
 import cors from 'cors';
 import { authMiddleWare } from './src/middleware/authMiddleWare.js';
 import webhookRouter from './src/routes/Webhooks.js';
-const app = express();
+import http from "http";
+import { WebSocketServer } from 'ws';
+import url from "url";
+import { verifyToken } from './src/services/firebase.js';
+
+
 
 dotenv.config();
 var PORT = process.env.PORT
 
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({server});
+
+export var clientSocketsMap = new Map();
+// web socket code
+wss.on('connection', async (ws, req)=>{
+    var token;
+    try{
+      // Retrieve the query string and parse token parameter properly
+      // url.parse(req.url, true) yields .query as an object
+      const parsedUrl = url.parse(req.url, true);
+      token = parsedUrl.query && parsedUrl.query.token;
+      if(!token){
+        console.log('No token parameter')
+        ws.close(1002, 'Invalid request')
+        return
+      }
+      
+    }catch(err){
+      console.log(`[ERROR]:${err}`)
+      ws.close(1002, 'Invalid request')
+    }
+    const decoded = await verifyToken(token)
+    if(!decoded){
+      ws.close(1002, 'Unauthorized user')
+      return
+    }
+    console.log(`Decoded has been successful`)
+    // setting the websocket
+    let socketsSet = clientSocketsMap.get(decoded.uid);
+    if (!socketsSet) {
+      socketsSet = new Set();
+      clientSocketsMap.set(decoded.uid, socketsSet);
+      console.log(`Set the client socket map with key:${decoded.uid}`)
+    }
+    socketsSet.add(ws);
+    ws.on('message', (message)=>{
+        console.log(`Received message:${message.toString()}`);
+    })
+    ws.on('close', ()=>{
+      console.log('client disconnected')
+    })
+})
 
 app.use(cors({origin:true}));
 
@@ -40,6 +89,6 @@ app.get('/', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running at http://localhost:${PORT}`);
 });

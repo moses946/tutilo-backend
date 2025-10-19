@@ -74,7 +74,7 @@ async function handleReadChats(req, res){
             ...doc.data()
         }));
         
-        console.log('Found chats:', chats.length);
+        // console.log('Found chats:', chats.length);
         res.json(chats);
     } catch (error) {
         console.error('Error fetching chats:', error);
@@ -120,7 +120,7 @@ async function handleCreateMessage(req, res){
         // run the AI agent to get the response
         result = await handleRunAgent(req, data, obj, chatRef);
         // the agent returns a JSON with {message:string}
-        createMessageQuery({chatRef, message:result.message, role:'model'})
+        // createMessageQuery({chatRef, message:result.message, role:'model'})
     }catch(err){
         console.log(`Error occurred while creating message`);
         console.log(`ERROR:${err}`);
@@ -132,7 +132,7 @@ async function handleCreateMessage(req, res){
 }
 
 async function handleReadMessages(req, res){
-    console.log('Fetching messages');
+    // console.log('Fetching messages');
     // build cache
     let chatID = req.params.chatID;
     // fetch the messages related to this ID
@@ -148,7 +148,7 @@ async function handleReadMessages(req, res){
     })
     // add the messages to map
     let chatObj = chatMap.get(chatID);
-    console.log(chatObj)
+    // console.log(chatObj)
     if(chatObj){
         chatObj.history = messages;
     }else{

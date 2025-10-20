@@ -645,9 +645,10 @@ ${JSON.stringify(retrievedChunks)}
 
 ## Directive 2: Cite Your Sources Impeccably
 - When you use information from a chunk, you **MUST** cite its ID at the end of the relevant sentence.
-- Single source format: This is a fact from the text <chunk42>.
-- Multiple source format: This synthesizes ideas from two sources <chunk12><chunk15>.
+- Single source format: This is a fact from the text [chunk42].
+- Multiple source format: This synthesizes ideas from two sources [chunk12][chunk15].
 - Never invent chunk IDs or cite chunks you did not use.
+- NOTE!: format for chunk Id citation is [chunkID]
 
 ## Directive 3: Be a Great Tutor
 - Keep explanations concise and clear.

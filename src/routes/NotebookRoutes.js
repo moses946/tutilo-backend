@@ -52,7 +52,7 @@ notebookRouter.get('/:id/edit', handleNotebookEditFetch);
 // notebookRouter.get('/:id/materials', handleNotebookMaterialsList);
 // notebookRouter.delete('/:id/materials/:materialId', handleMaterialDeletion);
 notebookRouter.patch('/:id', (req, res)=>{});
-notebookRouter.delete('/:id', (req, res)=>{});
+notebookRouter.delete('/:id', handleNotebookDeletion);
 notebookRouter.get('/:id/conceptMap', handleConceptMapRetrieval);
 notebookRouter.get('/:id/concepts', handleConceptList);
 notebookRouter.get('/:id/concepts/:conceptId', handleConceptDetail);
@@ -198,7 +198,7 @@ async function handleNotebookDeletion(req, res){
         await deleteNotebookQuery(id);
         await bucket.deleteFiles({prefix:`notebooks/${id}/`});
         //await bucket.deleteFiles({ prefix: `notebooks/${id}/` });
-        res.json({message: 'Notebook deleted successfully'});
+        res.status(200).json({message: 'Notebook deleted successfully'});
     }catch(err){
         console.error('Notebook deletion failed:', err);
         res.status(500).json({error: 'Notebook deletion failed'});
@@ -260,26 +260,28 @@ async function handleNotebookUpdate(req, res) {
             await updateNotebookWithMaterials(notebookRef, materialRefs);
             console.log('Updated notebook with new material references');
 
-            let result = await handleConceptMapGeneration(newChunkRefsCombined, newChunksCombined);
+            {/* Handle generating a new concept map and new flashcards once new material is added to the notebook */}
 
-        result = JSON.parse(result)
-        let concepts = result.concept_map
-        let chunkConceptMap = {}
-        concepts.map((concept)=>(
-            concept.chunkIds.map((chunkId)=>{
-                chunkConceptMap[chunkId]=concept.concept
-            })
-        ))
-        await notebookRef.update({summary:result.summary})
-        await createConceptMapQuery(chunkConceptMap, result, notebookRef)
-      
+            // let result = await handleConceptMapGeneration(newChunkRefsCombined, newChunksCombined);
+
+            // result = JSON.parse(result)
+            // let concepts = result.concept_map
+            // let chunkConceptMap = {}
+            // concepts.map((concept)=>(
+            //     concept.chunkIds.map((chunkId)=>{
+            //         chunkConceptMap[chunkId]=concept.concept
+            //     })
+            // ))
+            // await notebookRef.update({summary:result.summary})
+            // await createConceptMapQuery(chunkConceptMap, result, notebookRef)
+        
 
 
-        const flashcardRef = await handleFlashcardGeneration(newChunkRefsCombined, newChunksCombined, notebookRef);
-        if (flashcardRef) {
-            await updateNotebookWithFlashcards(notebookRef, flashcardRef);
-            console.log('Updated notebook with flashcard reference');
-        }
+            // const flashcardRef = await handleFlashcardGeneration(newChunkRefsCombined, newChunksCombined, notebookRef);
+            // if (flashcardRef) {
+            //     await updateNotebookWithFlashcards(notebookRef, flashcardRef);
+            //     console.log('Updated notebook with flashcard reference');
+            // }
             
         }
 

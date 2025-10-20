@@ -12,7 +12,9 @@ import {
     deleteNotebookQuery,
     readNotebooksQuery,
     createConceptMapQuery,
-    updateNotebookWithFlashcards
+    updateNotebookWithFlashcards,
+    updateNotebookMetadata,
+    removeMaterialFromNotebook
 
 } from '../models/query.js';
 import { handleConceptMapGeneration, handleFlashcardGeneration } from '../models/models.js';
@@ -46,8 +48,11 @@ notebookRouter.get('/', async (req, res)=>{
     }
 });
 notebookRouter.get('/:id', handleNotebookFetch);
+notebookRouter.get('/:id/edit', handleNotebookEditFetch);
+// notebookRouter.get('/:id/materials', handleNotebookMaterialsList);
+// notebookRouter.delete('/:id/materials/:materialId', handleMaterialDeletion);
 notebookRouter.patch('/:id', (req, res)=>{});
-notebookRouter.delete('/:id', (req, res)=>{});
+notebookRouter.delete('/:id', handleNotebookDeletion);
 notebookRouter.get('/:id/conceptMap', handleConceptMapRetrieval);
 notebookRouter.get('/:id/concepts', handleConceptList);
 notebookRouter.get('/:id/concepts/:conceptId', handleConceptDetail);
@@ -193,86 +198,123 @@ async function handleNotebookDeletion(req, res){
         await deleteNotebookQuery(id);
         await bucket.deleteFiles({prefix:`notebooks/${id}/`});
         //await bucket.deleteFiles({ prefix: `notebooks/${id}/` });
-        res.json({message: 'Notebook deleted successfully'});
+        res.status(200).json({message: 'Notebook deleted successfully'});
     }catch(err){
         console.error('Notebook deletion failed:', err);
         res.status(500).json({error: 'Notebook deletion failed'});
     }
 }
 
-async function handleNotebookUpdate(req, res){
-    try{
-        console.log(`Received these files:${req.files}--${req.files[0].originalname}`);
-        const files = req.files;
-        const notebookID = req.params.id;
-        const notebookRef = db.collection('Notebook').doc(notebookID);
-        // upload the materials to the object store
-        const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
-        const uploaded = await handleBulkFileUpload(files, noteBookBasePath);
-        
-        //Create material documents in Firestore and get references
-        const materialRefs = await createMaterialQuery(notebookRef, files);
-        console.log('Material documents created');
-        // Step 4: Process each file into chunks and create chunk documents
-        const materialChunkMappings = [];
-        // chunking the materials
-        for(let i = 0; i < files.length; i++) {
-            const file = files[i];
-            const materialRef = materialRefs[i];
-            
-            // Extract chunks from the file
-            const chunks = await extractPdfText(file.buffer);
-            console.log(`Extracted ${chunks.length} chunks from ${file.originalname || file.name}`);
-            
-            // Create chunk documents in Firestore
-            const chunkRefs = await createChunksQuery(chunks, materialRef);
-            console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.id}`);
-            const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
-            const chunkItems = chunks.map((chunk, index)=>{
-                const chunkRef = chunkRefs[index];
-                const chunkPath = chunkRef.id;
-                return {...chunk, name: chunkPath};
-            })
-            await handleBulkChunkUpload(chunkItems, chunkBasePath);
+async function handleNotebookUpdate(req, res) {
+    try {
+        const { id: notebookId } = req.params;
+        const notebookRef = db.collection('Notebook').doc(notebookId);
 
-            // Step 5: Create embeddings and store in Qdrant
-            const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs);
-            console.log(`Created embeddings and stored ${qdrantPointIds.length} points in Qdrant`);
+        const files = req.files || [];
+        const { deletedMaterialIds: deletedMaterialIdsJson, links: linksJson, texts: textsJson } = req.body;
+
+        // Handle deletions
+        if (deletedMaterialIdsJson) {
+            const deletedMaterialIds = JSON.parse(deletedMaterialIdsJson);
+            if (Array.isArray(deletedMaterialIds) && deletedMaterialIds.length > 0) {
+                console.log(`Deleting ${deletedMaterialIds.length} materials from notebook ${notebookId}`);
+                const deletePromises = deletedMaterialIds.map(materialId => 
+                    removeMaterialFromNotebook(notebookRef, materialId)
+                );
+                await Promise.all(deletePromises);
+                console.log('Finished deleting materials.');
+            }
+        }
+
+        // Handle new file additions
+        if (files.length > 0) {
+            console.log(`Adding ${files.length} new files to notebook ${notebookId}`);
+            const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
+            await handleBulkFileUpload(files, noteBookBasePath);
+
+            const materialRefs = await createMaterialQuery(notebookRef, files);
+            console.log('New material documents created');
+
+            let newChunkRefsCombined = [];
+            let newChunksCombined = [];
             
-            // Step 6: Update chunk documents with Qdrant point IDs
-            await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
-            console.log(`Updated chunk documents with Qdrant point IDs`);
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const materialRef = materialRefs[i];
+                
+                const chunks = await extractPdfText(file.buffer);
+                newChunksCombined.push(...chunks);
+                console.log(`Extracted ${chunks.length} chunks from ${file.originalname || file.name}`);
+                
+                const chunkRefs = await createChunksQuery(chunks, materialRef);
+                newChunkRefsCombined.push(...chunkRefs);
+                console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.id}`);
+
+                const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookId);
+                console.log(`Created embeddings and stored ${qdrantPointIds.length} points in Qdrant`);
+                
+                await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
+                await updateMaterialWithChunks(materialRef, chunkRefs);
+            }
             
-            // Update material with chunk references
-            await updateMaterialWithChunks(materialRef, chunkRefs);
-            console.log(`Updated material ${materialRef.id} with chunk references`);
+            await updateNotebookWithMaterials(notebookRef, materialRefs);
+            console.log('Updated notebook with new material references');
+
+            {/* Handle generating a new concept map and new flashcards once new material is added to the notebook */}
+
+            // let result = await handleConceptMapGeneration(newChunkRefsCombined, newChunksCombined);
+
+            // result = JSON.parse(result)
+            // let concepts = result.concept_map
+            // let chunkConceptMap = {}
+            // concepts.map((concept)=>(
+            //     concept.chunkIds.map((chunkId)=>{
+            //         chunkConceptMap[chunkId]=concept.concept
+            //     })
+            // ))
+            // await notebookRef.update({summary:result.summary})
+            // await createConceptMapQuery(chunkConceptMap, result, notebookRef)
+        
+
+
+            // const flashcardRef = await handleFlashcardGeneration(newChunkRefsCombined, newChunksCombined, notebookRef);
+            // if (flashcardRef) {
+            //     await updateNotebookWithFlashcards(notebookRef, flashcardRef);
+            //     console.log('Updated notebook with flashcard reference');
+            // }
             
-            materialChunkMappings.push({
-                materialId: materialRef.id,
-                materialName: file.originalname || file.name,
-                chunkCount: chunks.length,
-                chunkRefs: chunkRefs,
-                qdrantPointIds: qdrantPointIds
+        }
+
+        // Handle new links and texts
+        const links = linksJson ? JSON.parse(linksJson) : [];
+        const texts = textsJson ? JSON.parse(textsJson) : [];
+        
+        if (links.length > 0 || texts.length > 0) {
+            const notebookSnap = await notebookRef.get();
+            const notebookData = notebookSnap.data();
+    
+            const existingLinks = notebookData.links || [];
+            const existingTexts = notebookData.texts || [];
+    
+            const mergedLinks = [...new Set([...existingLinks, ...links])];
+            const mergedTexts = [...new Set([...existingTexts, ...texts])];
+            
+            await notebookRef.update({
+                links: mergedLinks,
+                texts: mergedTexts,
             });
         }
-        
-    
-        await updateNotebookWithMaterials(notebookRef, materialRefs);
-        console.log('Updated notebook with new material references'); 
-        
-        // Generate concept map and flashcards for the new materials
-        await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
-        const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef);
-        if (flashcardRef) {
-            await updateNotebookWithFlashcards(notebookRef, flashcardRef);
-            console.log('Updated notebook with new flashcard reference');
-        }
-        
-        res.json({materialChunkMappings})
-    }catch(err){
-        console.error('Notebook creation failed:', err);
+
+        console.log(`Notebook ${notebookId} updated successfully.`);
+        res.status(200).json({
+            message: 'Notebook updated successfully',
+            notebookId: notebookId,
+        });
+
+    } catch (err) {
+        console.error(`Notebook update failed for ID ${req.params.id}:`, err);
         res.status(500).json({
-            error: 'Notebook creation failed',
+            error: 'Notebook update failed',
             details: err.message
         });
     }
@@ -781,6 +823,60 @@ async function handleNotebookFetch(req, res) {
         console.error('Failed to fetch notebook data:', err);
         res.status(500).json({
             error: 'Failed to fetch notebook data',
+            details: err.message
+        });
+    }
+}
+
+async function handleNotebookEditFetch(req, res) {
+    try {
+        const { id } = req.params;
+        if (!id) {
+            return res.status(400).json({
+                error: 'Notebook ID is required',
+                message: 'Please provide a valid notebook ID'
+            });
+        }
+
+        const notebookRef = db.collection('Notebook').doc(id);
+        const notebookSnap = await notebookRef.get();
+
+        if (!notebookSnap.exists) {
+            return res.status(404).json({
+                error: 'Notebook not found',
+                message: 'No notebook found with the provided ID'
+            });
+        }
+
+        const notebookData = notebookSnap.data();
+        const materialRefs = notebookData.materialRefs || [];
+        
+        const materials = [];
+        for (const materialRef of materialRefs) {
+            const materialSnap = await materialRef.get();
+            if (materialSnap.exists) {
+                const materialData = materialSnap.data();
+                const file = bucket.file(`notebooks/${id}/materials/${materialData.storagePath}`);
+                const [metadata] = await file.getMetadata();
+                const fileSize = metadata.size;
+
+                materials.push({
+                    materialId: materialSnap.id,
+                    materialName: materialData.name,
+                    fileSize: fileSize || 0
+                });
+            }
+        }
+
+        res.json({
+            notebookName: notebookData.title,
+            materials: materials
+        });
+
+    } catch (err) {
+        console.error('Failed to fetch notebook data for editing:', err);
+        res.status(500).json({
+            error: 'Failed to fetch notebook data for editing',
             details: err.message
         });
     }

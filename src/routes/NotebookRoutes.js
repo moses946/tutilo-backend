@@ -856,10 +856,14 @@ async function handleNotebookEditFetch(req, res) {
             const materialSnap = await materialRef.get();
             if (materialSnap.exists) {
                 const materialData = materialSnap.data();
+                const file = bucket.file(`notebooks/${id}/materials/${materialData.storagePath}`);
+                const [metadata] = await file.getMetadata();
+                const fileSize = metadata.size;
+
                 materials.push({
                     materialId: materialSnap.id,
                     materialName: materialData.name,
-                    fileSize: materialData.fileSize || 0
+                    fileSize: fileSize || 0
                 });
             }
         }

@@ -32,7 +32,7 @@ export async function videoReadyWebhook(req, res) {
                 console.log(`[ERROR]:${err}`);
             }
         }
-        await messageRef.update({attachments:[{url:videoUrl, status:200}]})
+        await messageRef.update({attachments:[{mediaUrl:videoUrl, status:200}]})
     }catch(err){
         console.log(`[ERROR]:${err}`)
         console.log('Webhooks error')

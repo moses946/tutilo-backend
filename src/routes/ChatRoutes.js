@@ -143,7 +143,8 @@ async function handleReadMessages(req, res){
         const data = doc.data();
         messages.push({
             role:data.role,
-            parts:JSON.parse(data.content)
+            parts:JSON.parse(data.content),
+            attachments:data.attachments
         });
     })
     // add the messages to map

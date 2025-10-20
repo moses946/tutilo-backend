@@ -626,7 +626,7 @@ export const agentPrompt = (chatObj) => {
 
 # PRIMARY_TASK:
 Based on the user's request and the provided context, you must either provide a direct, text-based answer OR call a tool. Your response must be one of these two formats, never both.
-
+After a tool call, give a text response synthesizing the results
 # CONTEXT:
 <CONVERSATION_HISTORY>
 ${JSON.stringify(fullHistory)}

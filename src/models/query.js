@@ -330,35 +330,80 @@ export const createMessageQuery = async (data)=>{
 export const createUserQuery = async (data)=>{
     let now = admin.firestore.FieldValue.serverTimestamp();
     let userRef = db.collection('User').doc(data.uid);
-    await userRef.set({
-        // Set the document ID manually using the provided uid (if available)
-        dateJoined:now,
-        email:data.email,
-        firstName:data.firstName,
-        lastName:data.lastName,
-        lastLogin:now
-    })
     
-    // Create UserProfile document with user-provided data
-    const onboardingData = data.onboardingData || {};
-    const userProfileRef = await db.collection('UserProfile').add({
-        dateOfBirth: onboardingData.dateOfBirth || null,
-        educationLevel: onboardingData.educationLevel || null,
-        location: onboardingData.location || null,
-        preferences: onboardingData.preferences || {
-            appPreferences: {
-                theme: "light" // Default theme if not provided
-            }
-        },
-        profilePictureURL: data.photoURL || "",
-        streak: data.streak || {
-            count: 0, // Start with 0 streak
-            lastDate: now
-        },
-        userId: userRef // Reference to the User document
-    })
+    // Check if user already exists
+    const userDoc = await userRef.get();
+    if (!userDoc.exists) {
+        // Create User document only if it doesn't exist
+        await userRef.set({
+            // Set the document ID manually using the provided uid (if available)
+            dateJoined:now,
+            email:data.email,
+            firstName:data.firstName,
+            lastName:data.lastName,
+            lastLogin:now,
+            subscription:'free'
+        })
+        console.log(`User created with ID: ${userRef.id}`);
+    } else {
+        // Update lastLogin for existing user
+        await userRef.update({
+            lastLogin: now,
+            email: data.email || userDoc.data().email,
+            firstName: data.firstName || userDoc.data().firstName,
+            lastName: data.lastName || userDoc.data().lastName
+        });
+        console.log(`User updated with ID: ${userRef.id}`);
+    }
     
-    console.log(`UserProfile created with ID: ${userProfileRef.id} for User: ${userRef.id}`);
+    // Check if UserProfile already exists for this user
+    const existingProfiles = await db.collection('UserProfile')
+        .where('userId', '==', userRef)
+        .limit(1)
+        .get();
+    
+    if (existingProfiles.empty) {
+        // Create UserProfile document only if none exists
+        const onboardingData = data.onboardingData || {};
+        const userProfileRef = await db.collection('UserProfile').add({
+            dateOfBirth: onboardingData.dateOfBirth || null,
+            educationLevel: onboardingData.educationLevel || null,
+            location: onboardingData.location || null,
+            preferences: onboardingData.preferences || {
+                appPreferences: {
+                    theme: "light" // Default theme if not provided
+                }
+            },
+            profilePictureURL: data.photoURL || "",
+            streak: data.streak || {
+                count: 0, // Start with 0 streak
+                lastDate: now
+            },
+            userId: userRef // Reference to the User document
+        })
+        
+        console.log(`UserProfile created with ID: ${userProfileRef.id} for User: ${userRef.id}`);
+    } else {
+        // Update existing UserProfile with new onboarding data if provided
+        const existingProfile = existingProfiles.docs[0];
+        const onboardingData = data.onboardingData || {};
+        
+        if (Object.keys(onboardingData).length > 0) {
+            await existingProfile.ref.update({
+                dateOfBirth: onboardingData.dateOfBirth || existingProfile.data().dateOfBirth,
+                educationLevel: onboardingData.educationLevel || existingProfile.data().educationLevel,
+                location: onboardingData.location || existingProfile.data().location,
+                preferences: {
+                    ...existingProfile.data().preferences,
+                    ...onboardingData.preferences
+                },
+                profilePictureURL: data.photoURL || existingProfile.data().profilePictureURL
+            });
+            console.log(`UserProfile updated with ID: ${existingProfile.id} for User: ${userRef.id}`);
+        } else {
+            console.log(`UserProfile already exists with ID: ${existingProfile.id} for User: ${userRef.id}`);
+        }
+    }
     
     return userRef
 }

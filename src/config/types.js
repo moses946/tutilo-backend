@@ -304,10 +304,10 @@ Example:
 ### 1. Generate a Summary
 - Write a concise summary (2-4 sentences) that captures the core ideas and their relationships from the input material.
 
-### 2. Create the Concept-to-Chunk Map (\`concept_map\`)
+### 2. Create the Concept-to-Chunk Map
 - Identify the most important concepts in the text.
-- For each concept, create a key in the \`concept_map\` object.
-- The value for each key must be an array of the \`chunkID\`s where that concept is discussed.
+- For each concept, create a key in the \`nodes\` object.
+- The value for each key must be an array of the \`chunkIds\` where that concept is discussed.
 
 ### 3. Construct the Hierarchical Graph (\`graph\`)
 - Build a top-down, tree-like graph of nodes and edges representing the relationships between concepts.
@@ -336,23 +336,22 @@ You MUST return a single, valid JSON object and nothing else. Do not add explana
 
 {
   "summary": "string",
-  "concept_map": {
-    "Concept Name 1": [1, 2],
-    "Concept Name 2": [3]
-  },
   "graph": {
     "nodes": [
       {
-        "id": "unique_string_id",
-        "data": { "label": "Concept Name" },
-        "position": { "x": 0, "y": 0 }
-      }
+        "id": "unique-string-id",
+        "position": { "x": 0, "y": 0 },
+        "data": {
+          "label": "Concept Name",
+          "chunkIds": ["chunk1", "chunk3"]
+        }
+      },
     ],
     "edges": [
       {
-        "id": "e[source_id]-[target_id]",
-        "source": "parent_node_id",
-        "target": "child_node_id"
+        "id": "e[source-id]-[target-id]",
+        "source": "[parent-node-id]",
+        "target": "[target-node-id]"
       }
     ]
   }
@@ -360,16 +359,74 @@ You MUST return a single, valid JSON object and nothing else. Do not add explana
 
 ---
 # WORKED_EXAMPLES
-(Your original examples are excellent and should be kept here)
 
 ### Example 1: Simple Hierarchy
-...
+
+Input:
+<chunkID: 1>
+[Photosynthesis is the process by which green plants make food using sunlight.]
+<chunkID: 2>
+[Chlorophyll is the pigment responsible for capturing light energy in plants.]
+<chunkID: 3>
+[The light reactions occur in the thylakoid membranes and produce ATP.]
+<chunkID: 4>
+[The Calvin cycle uses ATP to convert CO2 into glucose.]
+
+Output:
+{
+  "summary": "The material explains photosynthesis as a two-stage process in plants. Chlorophyll captures light energy for the light reactions, which produce ATP. The Calvin cycle then uses this ATP to convert CO2 into glucose.",
+  "graph": {
+    "nodes": [
+      { "id": "photosynthesis", "position": { "x": 0, "y": 0 }, "data": { "label": "Photosynthesis", "chunkIds": ["1"] } },
+      { "id": "chlorophyll", "position": { "x": -250, "y": 175 }, "data": { "label": "Chlorophyll", "chunkIds": ["2"] } },
+      { "id": "lightReactions", "position": { "x": 0, "y": 175 }, "data": { "label": "Light Reactions", "chunkIds": ["3"] } },
+      { "id": "calvinCycle", "position": { "x": 250, "y": 175 }, "data": { "label": "Calvin Cycle", "chunkIds": ["4"] } }
+    ],
+    "edges": [
+      { "id": "e1-2", "source": "photosynthesis", "target": "chlorophyll" },
+      { "id": "e1-3", "source": "photosynthesis", "target": "lightReactions" },
+      { "id": "e1-4", "source": "photosynthesis", "target": "calvinCycle" }
+    ]
+  }
+}
 
 ### Example 2: Multi-Level Hierarchy
-...
 
----
-Now, process the provided input chunks and generate the complete JSON output.
+Input:
+<chunkID: 1>
+[Introduction to calculus covers fundamental concepts of change and motion.]
+<chunkID: 2>
+[Limits describe the behavior of functions as inputs approach specific values.]
+<chunkID: 3>
+[Derivatives measure the rate of change of a function.]
+<chunkID: 4>
+[The product rule is used to differentiate products of functions.]
+<chunkID: 5>
+[The chain rule handles composite functions.]
+<chunkID: 6>
+[Integrals calculate the accumulation of quantities.]
+
+Output:
+{
+  "summary": "This material introduces calculus, covering limits, derivatives, and integrals. Derivatives include techniques like the product rule and chain rule.",
+  "graph": {
+    "nodes": [
+      { "id": "calculus", "position": { "x": 0, "y": 0 }, "data": { "label": "Introduction to Calculus", "chunkIds": ["1"] } },
+      { "id": "limits", "position": { "x": -250, "y": 175 }, "data": { "label": "Limits", "chunkIds": ["2"] } },
+      { "id": "derivatives", "position": { "x": 0, "y": 175 }, "data": { "label": "Derivatives", "chunkIds": ["3"] } },
+      { "id": "integrals", "position": { "x": 250, "y": 175 }, "data": { "label": "Integrals", "chunkIds": ["6"] } },
+      { "id": "productRule", "position": { "x": -125, "y": 350 }, "data": { "label": "Product Rule", "chunkIds": ["4"] } },
+      { "id": "chainRule", "position": { "x": 125, "y": 350 }, "data": { "label": "Chain Rule", "chunkIds": ["5"] } }
+    ],
+    "edges": [
+      { "id": "e1-2", "source": "calculus", "target": "limits" },
+      { "id": "e1-3", "source": "calculus", "target": "derivatives" },
+      { "id": "e1-6", "source": "calculus", "target": "integrals" },
+      { "id": "e3-4", "source": "derivatives", "target": "productRule" },
+      { "id": "e3-5", "source": "derivatives", "target": "chainRule" }
+    ]
+  }
+}
 `
 // export const intentPrompt = (chatObj, summary)=>{
 //   let chatObjCopy = {...chatObj};

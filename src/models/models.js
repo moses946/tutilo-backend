@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { GoogleGenAI, Type } from "@google/genai";
-import { createFlashcardsQuery } from './query.js';
+import { createFlashcardsQuery, createQuizQuery } from './query.js';
 import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
 import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
@@ -39,22 +39,6 @@ export const handleConceptMapGeneration = async (chunkRefs, chunks)=>{
                   summary: {
                     type: Type.STRING,
                   },
-                  concept_map: {
-                    // Represent dynamic key/value pairs as an array of entries
-                    // to satisfy OBJECT "properties" non-empty requirement
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        concept: { type: Type.STRING },
-                        chunkIds: {
-                          type: Type.ARRAY,
-                          items: { type: Type.STRING },
-                        },
-                      },
-                      propertyOrdering: ["concept", "chunkIds"],
-                    },
-                  },
                   graph: {
                     type: Type.OBJECT,
                     properties: {
@@ -68,8 +52,12 @@ export const handleConceptMapGeneration = async (chunkRefs, chunks)=>{
                               type: Type.OBJECT,
                               properties: {
                                 label: { type: Type.STRING },
+                                chunkIds: {
+                                  type: Type.ARRAY,
+                                  items: { type: Type.STRING },
+                                },
                               },
-                              propertyOrdering: ["label"],
+                              required: ["label", "chunkIds"],
                             },
                             position: {
                               type: Type.OBJECT,
@@ -77,10 +65,10 @@ export const handleConceptMapGeneration = async (chunkRefs, chunks)=>{
                                 x: { type: Type.NUMBER },
                                 y: { type: Type.NUMBER },
                               },
-                              propertyOrdering: ["x", "y"],
+                              required: ["x", "y"],
                             },
                           },
-                          propertyOrdering: ["id", "data", "position"],
+                          required: ["id", "data", "position"],
                         },
                       },
                       edges: {
@@ -92,14 +80,14 @@ export const handleConceptMapGeneration = async (chunkRefs, chunks)=>{
                             source: { type: Type.STRING },
                             target: { type: Type.STRING },
                           },
-                          propertyOrdering: ["id", "source", "target"],
+                          required: ["id", "source", "target"],
                         },
                       },
                     },
-                    propertyOrdering: ["nodes", "edges"],
+                    required: ["nodes", "edges"],
                   },
                 },
-                propertyOrdering: ["summary", "concept_map", "graph"],
+                required: ["summary", "graph"],
               }
         }
     });
@@ -117,7 +105,7 @@ Your main task is to take in chunks of text from reference material, analyze the
 The output must always be in JSON with the following fields:  
 - "notebookName": the name of the notebook or topic.  
 - "numberOfCards": the total number of flashcards generated.  
-- "flashcards": a list of strings, each string representing one flashcard written in **notes style** (e.g., "Photosynthesis: process by which plants convert light into chemical energy").  
+- "flashcards": a list of strings, each string representing one flashcard written in notes style
 
 The flashcards should:  
 - Be concise and easy to scan as refresher notes.  
@@ -125,16 +113,16 @@ The flashcards should:
 - Avoid long explanations, questions, or unnecessary detail.  
 - Maximum number of flashcards: 20
 
-NOTE: Flashcards should not be questions or a quiz but in the form of just short notes or in the form of short notes ie What is an information system: This is a system used to store information.
+NOTE: Flashcards should be in the form of short notes ie An information system is a system used to store information.
 
 Response Example: 
 {
   "notebookName": "Biology Basics",
   "numberOfCards": 3,
   "flashcards": [
-    "Cell: basic structural and functional unit of life",
-    "Mitochondria: powerhouse of the cell, generates ATP",
-    "Photosynthesis: plants convert sunlight into chemical energy"
+    "The Cell is the basic structural and functional unit of life",
+    "The Mitochondria is the powerhouse of the cell, generates ATP",
+    "The Photosynthesis is the process by which plants convert sunlight into chemical energy"
   ]
 }
 `,
@@ -153,9 +141,7 @@ Response Example:
             },
         },
         propertyOrdering: ["numberOfCards", "flashcards"],
-    }});
-    console.log(response.text);
-    
+    }});    
     try {
         const responseData = JSON.parse(response.text);
         console.log('Generated flashcards:', responseData);
@@ -464,3 +450,93 @@ message = [{role:'user', parts:message}];
   })
   return {message:agentResponse.text, media:isMedia}
 }
+
+
+export const handleQuizGeneration = async (chatId, chunks) => {
+  try {
+    // Extract chunk texts for the AI model
+    const texts = chunks.map(chunk => {
+      const chunkText = chunk.text || (chunk.content && chunk.content[0] && chunk.content[0].text) || '';
+      return `<chunkID: ${chunk.chunkId}>\n[${chunkText}]`;
+    }).join('\n\n');
+
+    console.log(`Here ye texts: ${texts}`);
+    const prompt = `Based on the following text, generate a 10-question multiple-choice quiz.
+---
+CONTEXT:
+${texts}
+---
+RULES:
+1. Output Format:
+   Return a JSON array of exactly 10 objects, where each object has the following structure:
+   [
+     {
+       "question": "Question text here",
+       "choices": ["Option A", "Option B", "Option C", "Option D"],
+       "answer": "Correct answer text here"
+     }
+   ]
+
+2. Question Requirements:
+   - Each question must be derived directly from the provided text context.
+   - Each question should test key facts, concepts, or insights from the text.
+   - Avoid vague, trivial, or overly broad questions.
+   - Ensure the questions are clear, concise, and grammatically correct.
+
+3. Choices and Answers:
+   - Each question must have exactly four unique choices.
+   - The correct answer must be one of the four choices.
+   - Distractors (incorrect options) should be plausible but clearly incorrect upon understanding the context.
+
+4. Diversity:
+   - Include a mix of factual, conceptual, and inferential questions.
+   - Avoid repeating the same question style or phrasing.
+
+5. Output Only JSON:
+   - Do not include any explanations, markdown formatting, or introductory text.
+   - Output must be valid JSON following this exact format.
+`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        systemInstruction: `You are an AI quiz generator.`,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              question: { type: Type.STRING },
+              choices: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                minItems: 4,
+                maxItems: 4
+              },
+              answer: { type: Type.STRING }
+            },
+            required: ['question', 'choices', 'answer']
+          },
+          minItems: 10,
+          maxItems: 10
+        }
+      }
+    });
+
+    const quizData = JSON.parse(response.text);
+
+    if (quizData && quizData.length > 0) {
+      const quizRef = await createQuizQuery(chatId, quizData);
+      console.log(`Stored quiz ${quizRef.id} in Firestore for chat ${chatId}`);
+      return quizRef;
+    } else {
+      console.log('No quiz data generated.');
+      return null;
+    }
+  } catch (error) {
+    console.error('Error generating or storing quiz:', error);
+    return null;
+  }
+};

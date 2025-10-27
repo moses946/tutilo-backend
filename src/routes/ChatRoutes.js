@@ -24,6 +24,7 @@ chatRouter.get('/', handleReadChats);
 chatRouter.post('/', handleCreateChat);
 chatRouter.get('/:chatID/messages', handleReadMessages);
 chatRouter.post('/:chatID/messages', upload.array('files'),handleCreateMessage);
+chatRouter.get('/:chatID/quiz', handleQuizRetrieval);
 chatRouter.patch('/:chatID/messages/:messageId', (req, res)=>{});
 chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
 
@@ -81,6 +82,34 @@ async function handleReadChats(req, res){
         res.status(500).json({ error: 'Failed to fetch chats', message: error.message });
     }
 }
+
+async function handleQuizRetrieval(req, res) {
+    try {
+        const { chatID } = req.params;
+        const chatRef = db.collection('Chat').doc(chatID);
+        const quizSnapshot = await db.collection('Quizzes')
+            .where('chatID', '==', chatRef)
+            .limit(1)
+            .get();
+
+        if (quizSnapshot.empty) {
+            return res.status(404).json({
+                error: 'Quiz not found',
+                message: `No quiz found for chat ID: ${chatID}`
+            });
+        }
+
+        const quizDoc = quizSnapshot.docs[0];
+        res.json(quizDoc.data());
+    } catch (err) {
+        console.error('Error retrieving quiz:', err);
+        res.status(500).json({
+            error: 'Failed to retrieve quiz',
+            details: err.message
+        });
+    }
+}
+
 export default chatRouter
 
 // handle reading messages

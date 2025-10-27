@@ -1,6 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import notebookRouter from './src/routes/NotebookRoutes.js';
+import notebookRouter, { handleMaterialDownload } from './src/routes/NotebookRoutes.js';
 import authRouter from './src/routes/AuthRoutes.js';
 import billingRouter from './src/routes/BillingRoutes.js';
 import userRouter from './src/routes/UserRoutes.js';
@@ -67,16 +67,17 @@ wss.on('connection', async (ws, req)=>{
 
 app.use(cors({origin:true}));
 
-
 // Middleware
 app.use(express.json());
 
 // Routers
-app.use('/api/v1/notebooks', notebookRouter);
+// Handle multipart/form-data routes before express.json()
+app.get('/api/v1/notebooks/:id/materials/:materialId/download', handleMaterialDownload);
+app.use('/api/v1/notebooks', authMiddleWare, notebookRouter);
+app.use('/api/v1/chats', authMiddleWare, chatRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/billing', billingRouter);
 app.use('/api/v1/users', userRouter);
-app.use('/api/v1/chats', authMiddleWare, chatRouter);
 app.use('/api/v1/quizzes', quizRouter);
 app.use('/api/v1/flashcards', flashcardsRouter);
 app.use('/api/v1/webhooks', webhookRouter)

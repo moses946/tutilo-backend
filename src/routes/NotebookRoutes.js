@@ -1,6 +1,6 @@
 import express from 'express';
 import admin, { bucket, db } from '../services/firebase.js';
-import {upload, handleEmbedding, handleFileUpload, handleBulkFileUpload, handleBulkChunkUpload, handleChunkEmbeddingAndStorage, generateSignedUrl} from '../utils/utility.js'
+import {upload, handleEmbedding, handleFileUpload, handleBulkFileUpload, handleBulkChunkUpload, handleChunkEmbeddingAndStorage, generateSignedUrl, handleBulkChunkRetrieval} from '../utils/utility.js'
 import extractPdfText from '../utils/chunking.js'
 import { 
     createMaterialQuery, 
@@ -17,7 +17,7 @@ import {
     removeMaterialFromNotebook
 
 } from '../models/query.js';
-import { handleConceptMapGeneration, handleFlashcardGeneration } from '../models/models.js';
+import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGeneration } from '../models/models.js';
 
 
 
@@ -58,6 +58,8 @@ notebookRouter.get('/:id/concepts', handleConceptList);
 notebookRouter.get('/:id/concepts/:conceptId', handleConceptDetail);
 notebookRouter.post('/:id/concepts/:conceptId/chat', handleConceptChatCreate);
 notebookRouter.get('/:id/materials/:materialId/download', handleMaterialDownload);
+
+notebookRouter.put('/:id/concepts/:conceptId/progress', handleUserProgressUpdate);
 
 async function handleNotebookCreation(req, res){
     // Make sure there is an auth middleware that protects this route
@@ -132,15 +134,8 @@ async function handleNotebookCreation(req, res){
         let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
 
         result = JSON.parse(result)
-        let concepts = result.concept_map
-        let chunkConceptMap = {}
-        concepts.map((concept)=>(
-            concept.chunkIds.map((chunkId)=>{
-                chunkConceptMap[chunkId]=concept.concept
-            })
-        ))
         await notebookRef.update({summary:result.summary})
-        await createConceptMapQuery(chunkConceptMap, result, notebookRef)
+        await createConceptMapQuery(result, notebookRef)
       
 
 
@@ -389,21 +384,13 @@ function buildConceptListing(conceptMapData) {
         return [];
     }
 
-    const layout = conceptMapData.graphData.layout;
-    const graphNodes = layout.graph?.nodes || [];
-    const conceptEntries = layout.concept_map || [];
+    const graphNodes = conceptMapData.graphData.layout?.graph?.nodes || [];
 
     return graphNodes.map((node) => {
-        const conceptId = node.id;
-        const conceptName = node.data?.label || node.label || conceptId;
-        const match = conceptEntries.find(
-            (entry) => normalizeString(entry.concept) === normalizeString(conceptName)
-        );
-
         return {
-            conceptId,
-            conceptName,
-            chunkIds: match?.chunkIds || [],
+            conceptId: node.id,
+            conceptName: node.data?.label || node.label || node.id,
+            chunkIds: node.data?.chunkIds || [],
         };
     });
 }
@@ -419,20 +406,13 @@ async function resolveConceptContext({ notebookId, conceptId }) {
     const conceptMapData = conceptMapDoc.data;
     const layout = conceptMapData?.graphData?.layout;
     const graphNodes = layout?.graph?.nodes || [];
-    const conceptEntries = layout?.concept_map || [];
-    const summary = layout?.summary || conceptMapData?.summary || '';
+    const summary = layout?.summary || '';
 
     const node = graphNodes.find((n) => n.id === conceptId);
     if (!node) {
         return { exists: false };
     }
-
-    const conceptName = node.data?.label || node.label || node.id;
-    const conceptEntry = conceptEntries.find(
-        (entry) => normalizeString(entry.concept) === normalizeString(conceptName)
-    );
-
-    const chunkIds = Array.isArray(conceptEntry?.chunkIds) ? conceptEntry.chunkIds : [];
+    const chunkIds = node.data?.chunkIds || [];
 
     const chunkSnaps = await Promise.all(
         chunkIds.map((chunkId) => db.collection('Chunk').doc(chunkId).get())
@@ -470,6 +450,15 @@ async function resolveConceptContext({ notebookId, conceptId }) {
             materialMap.set(materialId, materialRef);
         }
     }
+    
+    // Retrieve chunk text content from storage at the very end
+    const chunkFilePaths = chunks.map(chunk => `notebooks/${notebookId}/chunks/${chunk.chunkId}.json`);
+
+    const chunkContents = await handleBulkChunkRetrieval(chunkFilePaths);
+    
+    chunks.forEach((chunk, index) => {
+        chunk.text = chunkContents[index];
+    });
 
     const materials = [];
 
@@ -512,9 +501,10 @@ async function resolveConceptContext({ notebookId, conceptId }) {
     }
 
     return {
+        notebookId,
         exists: true,
         conceptId,
-        conceptName,
+        conceptName: node.data?.label || node.label || node.id,
         chunkIds,
         summary,
         materials,
@@ -663,6 +653,17 @@ async function handleConceptChatCreate(req, res) {
             };
 
             chatRef = await db.collection('Chat').add(payload);
+
+            // Check if a quiz already exists before generating a new one
+            const quizSnapshot = await db.collection('Quizzes')
+                .where('chatID', '==', chatRef)
+                .limit(1)
+                .get();
+
+            if (quizSnapshot.empty) {
+                // Generate and store the quiz for the concept only if it doesn't exist
+                await handleQuizGeneration(chatRef.id, conceptContext.chunks);
+            }
         }
 
         console.log('Concept chat reference materials:', referenceMaterialsPayload);
@@ -684,7 +685,7 @@ async function handleConceptChatCreate(req, res) {
     }
 }
 
-async function handleMaterialDownload(req, res) {
+export async function handleMaterialDownload(req, res) {
     try {
         const { id: notebookId, materialId } = req.params;
         if (!notebookId || !materialId) {
@@ -768,7 +769,8 @@ async function handleMaterialDownload(req, res) {
 async function handleNotebookFetch(req, res) {
     try {
         const { id } = req.params;
-        
+        const userId = req.user?.uid;
+
         if (!id) {
             return res.status(400).json({
                 error: 'Notebook ID is required',
@@ -797,6 +799,9 @@ async function handleNotebookFetch(req, res) {
         let conceptMapData = null;
         if (!conceptMapSnapshot.empty) {
             conceptMapData = conceptMapSnapshot.docs[0].data();
+            
+            // Progress is stored directly on the concept map
+            conceptMapData.progress = conceptMapData.progress || {};
         }
 
         // Fetch flashcards if they exist
@@ -878,6 +883,56 @@ async function handleNotebookEditFetch(req, res) {
         res.status(500).json({
             error: 'Failed to fetch notebook data for editing',
             details: err.message
+        });
+    }
+}
+
+async function handleUserProgressUpdate(req, res) {
+    const { id: notebookId, conceptId: nodeId } = req.params;
+    const userId = req.user?.uid; // For authorization
+    const progressData = req.body;
+
+    if (!userId) {
+        return res.status(403).json({ error: 'Authentication required.' });
+    }
+    
+    if (!progressData || (progressData.isVisited === undefined && progressData.quizStatus === undefined)) {
+        return res.status(400).json({ error: 'Invalid progress data.' });
+    }
+
+    try {
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+        const conceptMapSnapshot = await db.collection('ConceptMap')
+            .where('notebookID', '==', notebookRef)
+            .limit(1)
+            .get();
+
+        if (conceptMapSnapshot.empty) {
+            return res.status(404).json({ error: 'Concept map not found.' });
+        }
+
+        const conceptMapRef = conceptMapSnapshot.docs[0].ref;
+        
+        const updatePayload = {};
+        if (progressData.isVisited !== undefined) {
+            updatePayload[`progress.${nodeId}.isVisited`] = progressData.isVisited;
+        }
+        if (progressData.quizStatus) {
+            updatePayload[`progress.${nodeId}.quizStatus`] = progressData.quizStatus;
+        }
+        
+        await conceptMapRef.update(updatePayload);
+
+        res.status(200).json({
+            message: 'Progress updated successfully',
+            notebookId,
+            nodeId,
+        });
+    } catch (err) {
+        console.error('Failed to update user progress:', err);
+        res.status(500).json({
+            error: 'Failed to update user progress',
+            details: err.message,
         });
     }
 }

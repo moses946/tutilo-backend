@@ -60,10 +60,16 @@ async function handleLogin(req, res){
         // Update user's last login timestamp
         let userRef = db.collection('User').doc(decoded.uid);
         await userRef.update({
-            lastLogin:admin.firestore.FieldValue.serverTimestamp()
-        })
-        
-        res.json({message: 'Login successful'});
+            lastLogin: admin.firestore.FieldValue.serverTimestamp()
+        });
+        // Fetch user document and subscription status
+        let userDoc = await userRef.get();
+        let userData = userDoc.data();
+        let subscription = userData && userData.subscription ? userData.subscription : null;
+        res.json({
+            message: 'Login successful',
+            subscription: subscription
+        });
     }catch(err){
         console.log('Error while logging user in');
         console.log(`ERROR:${err}`);

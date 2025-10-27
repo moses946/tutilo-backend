@@ -19,6 +19,7 @@ import {
 } from '../models/query.js';
 import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGeneration } from '../models/models.js';
 import { planLimits } from '../config/plans.js';
+import qdrantClient from '../services/qdrant.js';
 
 
 // Helper to convert MB to bytes
@@ -254,6 +255,9 @@ async function handleNotebookDeletion(req, res){
     try{
         await deleteNotebookQuery(id);
         await bucket.deleteFiles({prefix:`notebooks/${id}/`});
+        await bucket.deleteFiles({prefix:`videos/${id}/`})
+        // delete the qdrant collection
+        await qdrantClient.deleteCollection(id);
         //await bucket.deleteFiles({ prefix: `notebooks/${id}/` });
         res.status(200).json({message: 'Notebook deleted successfully'});
     }catch(err){

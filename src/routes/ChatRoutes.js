@@ -1,8 +1,8 @@
 import express, { text } from 'express';
-import admin, { db } from '../services/firebase.js';
+import admin, { bucket, db } from '../services/firebase.js';
 import { handleRunAgent } from '../models/models.js';
 import { handleBulkFileUpload, upload } from '../utils/utility.js';
-import { createMessageQuery } from '../models/query.js';
+import { createMessageQuery, deleteChatQuery } from '../models/query.js';
 
 // In memory chat map store
 /* 
@@ -24,6 +24,7 @@ chatRouter.get('/', handleReadChats);
 chatRouter.post('/', handleCreateChat);
 chatRouter.get('/:chatID/messages', handleReadMessages);
 chatRouter.post('/:chatID/messages', upload.array('files'),handleCreateMessage);
+chatRouter.delete('/:chatID/messages', handleDeleteChat)
 chatRouter.get('/:chatID/quiz', handleQuizRetrieval);
 chatRouter.patch('/:chatID/messages/:messageId', (req, res)=>{});
 chatRouter.delete('/:chatID/messages/:messageId', (req, res)=>{});
@@ -80,6 +81,23 @@ async function handleReadChats(req, res){
     } catch (error) {
         console.error('Error fetching chats:', error);
         res.status(500).json({ error: 'Failed to fetch chats', message: error.message });
+    }
+}
+
+async function handleDeleteChat(req, res){
+    try{
+        let chatID = req.params.chatID;
+        let {notebookID} = req.body;
+        if(!notebookID){
+            return res.status(400).json({message:'womp womp'})
+        }
+        // delete chat related stuff on db
+        await deleteChatQuery(chatID);
+        await bucket.deleteFiles({prefix:`notebooks/${notebookID}/chats/${chatID}/`})
+        res.status(200).json({message: 'Chat deleted successfully'});
+    }catch(err){
+        console.log(`[ERROR]:${err}`);
+        return res.status(500).json({message:'Woopsies!'});
     }
 }
 

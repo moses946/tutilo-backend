@@ -244,55 +244,115 @@ export const deleteNotebookQuery = async (notebookId) => {
     }
   
     const { materialRefs = [] } = notebookSnap.data();
-    if (!Array.isArray(materialRefs) || materialRefs.length === 0) {
-      // No materials → just delete the notebook and any flashcards
-      const flashcardsSnapshot = await db.collection('Flashcard')
-          .where('notebookID', '==', notebookRef)
-          .get();
+    
+    // Parallel queries for all related data
+    const [materialSnaps, flashcardsSnapshot, chatsSnapshot, conceptMapSnapshot] = await Promise.all([
+      // Get materials
+      Array.isArray(materialRefs) && materialRefs.length > 0
+        ? Promise.all(materialRefs.map((ref) => ref.get()))
+        : Promise.resolve([]),
       
-      const batch = db.batch();
-      flashcardsSnapshot.forEach(doc => batch.delete(doc.ref));
-      if (!flashcardsSnapshot.empty) {
-          await batch.commit();
-      }
+      // Get flashcards
+      db.collection('Flashcard')
+        .where('notebookID', '==', notebookRef)
+        .get(),
       
-      await notebookRef.delete();
-      return;
-    }
+      // Get chats
+      db.collection('Chat')
+        .where('notebookID', '==', notebookRef)
+        .get(),
+      db.collection('ConceptMap')
+      .where('notebookID', '==', notebookRef)
+      .get()
+    ]);
   
-    // materialRefs are already DocumentReferences
-    const materialSnaps = await Promise.all(materialRefs.map((ref) => ref.get()));
-  
-    // Collect all chunkRefs from materials
+    // Collect chunk refs from materials
     const chunkRefs = materialSnaps.flatMap((snap) => {
       const { chunkRefs = [] } = snap.data() || {};
-      return chunkRefs; // These should also be DocumentReferences
+      return chunkRefs;
     });
   
-    // Get all flashcards for this notebook (should be just one document now)
-    const flashcardsSnapshot = await db.collection('Flashcard')
-        .where('notebookID', '==', notebookRef)
-        .get();
+    // Get all messages for all chats in parallel
+    const chatIds = chatsSnapshot.docs.map(doc => doc.id);
+    const messageSnapshots = chatIds.length > 0
+      ? await Promise.all(
+          chatIds.map(chatId =>
+            db.collection('Message')
+              .where('chatID', '==', chatId)
+              .get()
+          )
+        )
+      : [];
+  
+    // Collect all refs to delete
+    const docsToDelete = [
+      ...materialRefs,
+      ...chunkRefs,
+      ...flashcardsSnapshot.docs.map(doc => doc.ref),
+      ...chatsSnapshot.docs.map(doc => doc.ref),
+      ...conceptMapSnapshot.docs.map(doc => doc.ref),
+      ...messageSnapshots.flatMap(snapshot => snapshot.docs.map(doc => doc.ref))
+    ];
+  
+    // Batch delete in chunks of 500
+    const BATCH_SIZE = 500;
+    const batchPromises = [];
     
-    const flashcardRefs = flashcardsSnapshot.docs.map(doc => doc.ref);
-  
-    // Prepare all docs to delete: materials + chunks + flashcards
-    const docsToDelete = [...materialRefs, ...chunkRefs, ...flashcardRefs];
-  
-    // Firestore batch limit = 500 → chunk if needed
-    let BATCH_SIZE = 500;
     for (let i = 0; i < docsToDelete.length; i += BATCH_SIZE) {
       const batch = db.batch();
-      docsToDelete.slice(i, i + BATCH_SIZE).forEach((doc) => batch.delete(doc));
-      BATCH_SIZE = Math.min(BATCH_SIZE, docsToDelete.length - i);
-      await batch.commit();
+      const chunk = docsToDelete.slice(i, i + BATCH_SIZE);
+      chunk.forEach((docRef) => batch.delete(docRef));
+      batchPromises.push(batch.commit());
+      
+      // Commit batches in parallel groups of 10 to avoid overwhelming Firestore
+      if (batchPromises.length >= 10) {
+        await Promise.all(batchPromises);
+        batchPromises.length = 0;
+      }
+    }
+    
+    // Commit any remaining batches
+    if (batchPromises.length > 0) {
+        console.log(`These are the batch promises:${batchPromises}`);
+      await Promise.all(batchPromises);
     }
   
     // Finally, delete the notebook itself
     await notebookRef.delete();
     console.log(`Notebook with ID:${notebookId} has been deleted`);
-  };
+};
 
+export const deleteChatQuery = async (chatId)=>{
+    const chatRef = db.collection('Chat').doc(chatId);
+    // get the messages
+    let messagesSnaps  = await db.collection('Chat').where('chatID', '==', chatId).get();
+    let messagesRefs = messagesSnaps.docs.map(doc=>doc.ref)
+    const docsToDelete = [...messagesRefs];
+    const BATCH_SIZE = 500;
+    const batchPromises = [];
+    
+    for (let i = 0; i < docsToDelete.length; i += BATCH_SIZE) {
+      const batch = db.batch();
+      const chunk = docsToDelete.slice(i, i + BATCH_SIZE);
+      chunk.forEach((docRef) => batch.delete(docRef));
+      batchPromises.push(batch.commit());
+      
+      // Commit batches in parallel groups of 10 to avoid overwhelming Firestore
+      if (batchPromises.length >= 10) {
+        await Promise.all(batchPromises);
+        batchPromises.length = 0;
+      }
+    }
+    
+    // Commit any remaining batches
+    if (batchPromises.length > 0) {
+        console.log(`These are the batch promises:${batchPromises.length}`);
+      await Promise.all(batchPromises);
+    }
+  
+    // Finally, delete the chat itself
+    await chatRef.delete();
+}
 /*
 This function creates a single flashcard document in Firestore containing all flashcards for a notebook
 Input: flashcards: Array of flashcard strings, notebookRef: DocumentReference

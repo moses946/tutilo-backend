@@ -24,7 +24,7 @@ async function handleInitTransaction(req, res){
         // Map plan types to amounts (in kobo/cents)
         const planAmounts = {
             'plus': 50000,   // 500 NGN
-            'premium': 150000 // 1500 NGN
+            'pro': 150000 // 1500 NGN
         };
 
         const amount = planAmounts[plan];
@@ -69,8 +69,8 @@ async function handleInitTransaction(req, res){
 
 async function handleTransactionVerification(req, res){
     const { userID } = req.params;
-    const { reference } = req.body;
-
+    const { reference, plan } = req.body;
+    
     if (!reference) {
         return res.status(400).json({ message: 'Transaction reference is required.' });
     }
@@ -108,7 +108,7 @@ async function handleTransactionVerification(req, res){
         }
 
         // 5. FULFILL THE ORDER (Your original logic)
-        const tier = 'plus'; // Determine tier based on amount or other data
+        const tier = plan; // Determine tier based on amount or other data
         const now = admin.firestore.FieldValue.serverTimestamp();
         const userRef = db.collection('User').doc(userID);
 
@@ -124,7 +124,10 @@ async function handleTransactionVerification(req, res){
         });
 
         await userRef.update({ subscription: tier });
-
+        // custom claim to firebase so that i can verify in the frontend to render different UI
+        await admin.auth().setCustomUserClaims(req.user.uid, {
+            plan,
+        })
         res.status(200).json({ message: 'Subscription updated successfully!', subscription: tier });
 
     } catch (err) {

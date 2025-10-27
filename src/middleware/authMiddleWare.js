@@ -1,4 +1,4 @@
-import { app, verifyToken } from "../services/firebase.js"
+import { app, db, verifyToken } from "../services/firebase.js"
 
 export const authMiddleWare = async(req, res, next)=>{
     try{
@@ -14,12 +14,20 @@ export const authMiddleWare = async(req, res, next)=>{
             res.status(401).json({message:'unauthorized'});
             return
         }
+        // tried to do custom claims, but did not work 
+        // let plan = idToken.claims ? idToken.claims.plan:'free'
+        let userDoc = await db.collection('User').doc(idToken.uid).get();
+        let userRef = userDoc.data();
+        let plan = userRef && userRef.subscription ? userRef.subscription : 'free';
+    
+        // console.log('Authotizationmiddleware--Plan: ',plan )
         req.user = {
             uid:idToken.uid,
             email:idToken.email,
+            subscription:plan
         };
     }catch(err){
-        console.log('Error while verifying token');
+        console.log('Error while verifying token', err);
         res.sendStatus(500)
         return
     }

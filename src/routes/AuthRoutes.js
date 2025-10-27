@@ -66,6 +66,7 @@ async function handleLogin(req, res){
         let userDoc = await userRef.get();
         let userData = userDoc.data();
         let subscription = userData && userData.subscription ? userData.subscription : null;
+        console.log(`User sub:${subscription}`)
         res.json({
             message: 'Login successful',
             subscription: subscription

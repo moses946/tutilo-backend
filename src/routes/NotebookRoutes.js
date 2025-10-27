@@ -18,13 +18,52 @@ import {
 
 } from '../models/query.js';
 import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGeneration } from '../models/models.js';
+import { planLimits } from '../config/plans.js';
 
 
+// Helper to convert MB to bytes
+const MB_TO_BYTES = (mb) => mb * 1024 * 1024;
+async function validateUploads(req, res, next) {
+    // This assumes an authentication middleware has already run and populated req.user
+    if (!req.user || !req.user.subscription) {
+        return res.status(401).json({ error: 'Authentication required.' });
+    }
 
+    const subscription = req.user.subscription; // 'free' or 'plus'
+    const limits = planLimits[subscription];
+
+    if (!limits) {
+        return res.status(403).json({ error: 'Invalid subscription plan.' });
+    }
+
+    const files = req.files;
+
+    // 1. Check file count
+    if (files.length > limits.maxFiles) {
+        return res.status(413).json({
+            error: 'File count limit exceeded.',
+            message: `Your '${subscription}' plan allows up to ${limits.maxFiles} files per upload. You tried to upload ${files.length}.`
+        });
+    }
+
+    // 2. Check individual file sizes
+    const maxFileSizeInBytes = MB_TO_BYTES(limits.maxFileSizeMB);
+    for (const file of files) {
+        if (file.size > maxFileSizeInBytes) {
+            return res.status(413).json({
+                error: 'File size limit exceeded.',
+                message: `The file "${file.originalname}" is too large. Your '${subscription}' plan allows files up to ${limits.maxFileSizeMB} MB.`
+            });
+        }
+    }
+    console.log('file checks passed')
+    // If all checks pass, proceed to the main handler
+    next();
+}
 const notebookRouter = express.Router();
-notebookRouter.post('/', upload.array('files'), handleNotebookCreation);
+notebookRouter.post('/', upload.array('files'),validateUploads, handleNotebookCreation);
 notebookRouter.delete('/:id', handleNotebookDeletion);
-notebookRouter.put('/:id', upload.array('files'),handleNotebookUpdate)
+notebookRouter.put('/:id', upload.array('files'), validateUploads,handleNotebookUpdate)
 notebookRouter.get('/', async (req, res)=>{
     try{
         // change this later to use req.user
@@ -62,6 +101,29 @@ notebookRouter.get('/:id/materials/:materialId/download', handleMaterialDownload
 notebookRouter.put('/:id/concepts/:conceptId/progress', handleUserProgressUpdate);
 
 async function handleNotebookCreation(req, res){
+    const { uid, subscription } = req.user;
+    const limits = planLimits[subscription];
+
+    // --- CHECK #3: Total Notebook Count for Free Users ---
+    if (subscription === 'free') {
+        try {
+            // This query assumes you store a 'userId' field in each notebook document
+            const notebooksQuery = db.collection('notebooks').where('userId', '==', uid);
+            const snapshot = await notebooksQuery.count().get();
+            const currentNotebookCount = snapshot.data().count;
+
+            if (currentNotebookCount >= limits.maxNotebooks) {
+                return res.status(403).json({
+                    error: 'Notebook limit reached.',
+                    message: `Your 'free' plan allows a maximum of ${limits.maxNotebooks} notebooks. Please upgrade to create more.`
+                });
+            }
+        } catch (dbError) {
+            console.error('Failed to query notebook count:', dbError);
+            return res.status(500).json({ error: 'Failed to verify user notebook count.' });
+        }
+    }
+
     // Make sure there is an auth middleware that protects this route
     console.log(`Received these files:${req.files}--${req.files[0].originalname}`);
         

@@ -1,5 +1,16 @@
 import admin, {db} from '../services/firebase.js';
 
+export const createQuizQuery = async (chatId, quizData) => {
+  const chatRef = db.collection('Chat').doc(chatId);
+  const quizPayload = {
+    chatID: chatRef,
+    questions: quizData,
+    dateCreated: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  const quizRef = await db.collection('Quizzes').add(quizPayload);
+  return quizRef;
+};
+
 /*
 This function executes the creation of the notebook 
 Input:notebook:obj,
@@ -100,14 +111,12 @@ export const createChunksQuery = async (chunks, materialRef) => {
     return chunkRefs;
 }
 
-export const createConceptMapQuery = async (chunkMap, result, notebookRef) => {
+export const createConceptMapQuery = async (result, notebookRef) => {
     console.log("Inside concept map query");
     const conceptMapRef = await db.collection('ConceptMap').add({
         notebookID:notebookRef,
         graphData:{layout:result, progress:{}},
-        chunkMap
     })
-    console.log(`Created concept map:${conceptMapRef}`);
 }
 
 /* 

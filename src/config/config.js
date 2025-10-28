@@ -1,0 +1,1 @@
+export const payStackURL = 'https://api.paystack.co'

@@ -1,5 +1,6 @@
 import express from 'express';
 import { handleCreateChat, handleCreateMessage, handleDeleteChat, handleQuizRetrieval, handleReadChats, handleReadMessages } from '../controllers/ChatController.js';
+import { upload } from '../utils/utility.js';
 
 const chatRouter = express.Router();
 chatRouter.get('/', handleReadChats);

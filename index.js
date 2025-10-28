@@ -1,6 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import notebookRouter, { handleMaterialDownload } from './src/routes/NotebookRoutes.js';
+import notebookRouter from './src/routes/NotebookRoutes.js';
 import authRouter from './src/routes/AuthRoutes.js';
 import billingRouter from './src/routes/BillingRoutes.js';
 import userRouter from './src/routes/UserRoutes.js';
@@ -14,6 +14,7 @@ import http from "http";
 import { WebSocketServer } from 'ws';
 import url from "url";
 import { verifyToken } from './src/services/firebase.js';
+import { handleMaterialDownload } from './src/controllers/NotebookController.js';
 
 
 

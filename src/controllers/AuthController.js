@@ -5,12 +5,13 @@ export async function handleSignUp(req, res){
     // do some sanitization...
     try{
         let data = req.body;
+        let token = req.headers.authorization.split(" ")[1];
         // get the token
-        if(!data.token){
+        if(!token){
             res.status(400).json({error: 'Token is required'});
             return
         }
-        let decoded = await verifyToken(data.token);
+        let decoded = await verifyToken(token);
         if(!decoded){
             res.status(401).json({error: 'Invalid token'});
             return
@@ -22,7 +23,7 @@ export async function handleSignUp(req, res){
             firstName: data.firstName || '',
             lastName: data.lastName || '',
             uid: decoded.uid,
-            photoURL:data.photoURL,
+            photoURL:data.photoURL || decoded.picture,
             onboardingData: data.onboardingData || null
         };
         console.log(userData);

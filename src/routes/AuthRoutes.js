@@ -1,8 +1,8 @@
 import express from "express";
-import { handleLogin, handleSignUp } from "../controllers/AuthController.js";
+import { handleLogin, handleOnboarding} from "../controllers/AuthController.js";
 
 const authRouter = express.Router();
-authRouter.post('/signup', handleSignUp);
+authRouter.post('/onboarding', handleOnboarding);
 authRouter.post('/login', handleLogin);
 // authRouter.post('logout', (req, res)=>{});
 

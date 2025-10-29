@@ -1,11 +1,16 @@
 import { createUserQuery } from "../models/query.js";
 import admin, { db, verifyToken } from "../services/firebase.js"
 
-export async function handleSignUp(req, res){
+export async function handleOnboarding(req, res){
     // do some sanitization...
     try{
         let data = req.body;
-        let token = req.headers.authorization.split(" ")[1];
+        let authHeader = req.headers.authorization;
+        let parts = authHeader.split(' ');
+        if(parts.length!==2||parts[0]!=='Bearer'){
+            res.status(401).json({error:'Invalid Authorization'});
+        }
+        const token = parts[1];
         // get the token
         if(!token){
             res.status(400).json({error: 'Token is required'});
@@ -18,10 +23,11 @@ export async function handleSignUp(req, res){
         }
         console.log(decoded);
         // Prepare user data for database
+        let displayName = (decoded.displayName || "").split(" ");
         const userData = {
             email: data.email || decoded.email,
-            firstName: data.firstName || '',
-            lastName: data.lastName || '',
+            firstName: data.firstName || displayName[0] ||'',
+            lastName: data.lastName || displayName[1] || '',
             uid: decoded.uid,
             photoURL:data.photoURL || decoded.picture,
             onboardingData: data.onboardingData || null
@@ -58,11 +64,14 @@ export async function handleLogin(req, res){
         // Fetch user document and subscription status
         let userDoc = await userRef.get();
         let userData = userDoc.data();
-        let subscription = userData && userData.subscription ? userData.subscription : null;
+        let subscription = userData && userData.subscription ? userData.subscription : 'free';
+        // check if onboarding is done
+        let isOnboardingComplete = userData && userData.isOnboardingComplete?true:false;
         console.log(`User sub:${subscription}`)
         res.json({
             message: 'Login successful',
-            subscription: subscription
+            subscription: subscription,
+            isOnboardingComplete
         });
     }catch(err){
         console.log('Error while logging user in');

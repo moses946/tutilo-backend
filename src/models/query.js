@@ -411,7 +411,8 @@ export const createUserQuery = async (data)=>{
             firstName:data.firstName,
             lastName:data.lastName,
             lastLogin:now,
-            subscription:'free'
+            subscription:'free',
+            isOnboardingComplete:false
         })
         console.log(`User created with ID: ${userRef.id}`);
     } else {
@@ -420,7 +421,8 @@ export const createUserQuery = async (data)=>{
             lastLogin: now,
             email: data.email || userDoc.data().email,
             firstName: data.firstName || userDoc.data().firstName,
-            lastName: data.lastName || userDoc.data().lastName
+            lastName: data.lastName || userDoc.data().lastName,
+            isOnboardingComplete:true
         });
         console.log(`User updated with ID: ${userRef.id}`);
     }

@@ -60,16 +60,8 @@ export const handleConceptMapGeneration = async (chunkRefs, chunks)=>{
                               },
                               required: ["label", "chunkIds"],
                             },
-                            position: {
-                              type: Type.OBJECT,
-                              properties: {
-                                x: { type: Type.NUMBER },
-                                y: { type: Type.NUMBER },
-                              },
-                              required: ["x", "y"],
-                            },
                           },
-                          required: ["id", "data", "position"],
+                          required: ["id", "data"],
                         },
                       },
                       edges: {

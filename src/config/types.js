@@ -80,7 +80,6 @@ You MUST return a single, valid JSON object and nothing else. Do not add explana
     "nodes": [
       {
         "id": "unique-string-id",
-        "position": { "x": 0, "y": 0 },
         "data": {
           "label": "Concept Name",
           "chunkIds": ["chunk1", "chunk3"]

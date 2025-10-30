@@ -151,6 +151,55 @@ export async function handleNotebookCreation(req, res){
     }
 }
 
+
+
+
+/**
+ * Processes a single material file: extracts text, creates chunks,
+ * generates embeddings, and updates Firestore documents.
+ * This function is designed to be run in parallel for each file.
+ */
+async function processMaterial(file, materialRef, notebookRef, vectorDim) {
+    // Extract chunks from the file
+    const chunks = await extractPdfText(file.buffer);
+    console.log(`Extracted ${chunks.length} chunks from ${file.originalname}`);
+
+    // Create chunk documents in Firestore
+    const chunkRefs = await createChunksQuery(chunks, materialRef);
+    console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.id}`);
+
+    // Create embeddings and store in Qdrant (can run in parallel with chunk upload)
+    const [qdrantPointIds, ] = await Promise.all([
+        handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookRef.id, vectorDim),
+        // Upload chunk content to storage (optional, can run in parallel)
+        (async () => {
+            const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
+            const chunkItems = chunks.map((chunk, index) => ({ ...chunk,
+                name: chunkRefs[index].id
+            }));
+            await handleBulkChunkUpload(chunkItems, chunkBasePath);
+        })(),
+    ]);
+    console.log(`Stored ${qdrantPointIds.length} points in Qdrant`);
+
+    // Update chunk documents with Qdrant IDs and update the material with chunk references
+    await Promise.all([
+        updateChunksWithQdrantIds(chunkRefs, qdrantPointIds),
+        updateMaterialWithChunks(materialRef, chunkRefs),
+    ]);
+    console.log(`Updated chunk documents and material ${materialRef.id}`);
+
+    // Return the mapping for the final response
+    return {
+        materialId: materialRef.id,
+        materialName: file.originalname || file.name,
+        chunkCount: chunks.length,
+        chunkRefs,
+        chunks,
+        qdrantPointIds,
+    };
+}
+
 export async function handleNotebookDeletion(req, res){
     const {id} = req.params;
     try{

@@ -1,4 +1,4 @@
-import { planLimits } from "../config/plans.js";
+import { getModelConfig, planLimits } from "../config/plans.js";
 import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGeneration } from "../models/models.js";
 import { createChunksQuery, createConceptMapQuery, createMaterialQuery, createNotebookQuery, deleteNotebookQuery, readNotebooksQuery, removeMaterialFromNotebook, updateChunksWithQdrantIds, updateMaterialWithChunks, updateNotebookWithFlashcards, updateNotebookWithMaterials } from "../models/query.js";
 import admin, { bucket, db } from "../services/firebase.js";
@@ -9,6 +9,10 @@ import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, 
 export async function handleNotebookCreation(req, res){
     const { uid, subscription } = req.user;
     const limits = planLimits[subscription];
+     // get the plan limits
+     console.log(`This is the plan ${subscription}`)
+     let modelLimits = getModelConfig(subscription)
+     let vectorDim = modelLimits.vectorDim;
 
     // --- CHECK #3: Total Notebook Count for Free Users ---
     if (subscription === 'free') {
@@ -74,8 +78,10 @@ export async function handleNotebookCreation(req, res){
             })
             await handleBulkChunkUpload(chunkItems, chunkBasePath);
 
+           
+
             // Step 5: Create embeddings and store in Qdrant
-            const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookRef.id);
+            const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookRef.id, vectorDim);
             console.log(`Created embeddings and stored ${qdrantPointIds.length} points in Qdrant`);
             
             
@@ -106,7 +112,7 @@ export async function handleNotebookCreation(req, res){
     
 
 
-        const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef);
+        const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef, modelLimits.flashcardModel);
 
         if (flashcardRef) {
             await updateNotebookWithFlashcards(notebookRef, flashcardRef);

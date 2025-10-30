@@ -4,8 +4,9 @@ import { createFlashcardsQuery, createQuizQuery } from './query.js';
 import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
 import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
-import { agentPrompt, chatNamingPrompt, conceptMapPrompt, intentPrompt } from '../config/types.js';
+import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt } from '../config/types.js';
 import { text } from 'express';
+import { getModelConfig } from '../config/plans.js';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -95,39 +96,16 @@ export const handleConceptMapGeneration = async (chunkRefs, chunks)=>{
     return response.text
 }
 
-export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef)=>{
+export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, flashcardModel)=>{
     const texts = chunkRefs.map((ref, idx) => `<chunkID: ${ref.id}>\n[${chunks[idx].text}]`).join('\n');
     const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        systemInstruction: `You are a helpful study assistant named Tutilo.  
-Your main task is to take in chunks of text from reference material, analyze them, and extract the most important concepts, facts, and definitions that a student would need for quick review. Convert this knowledge into concise, note-focused flashcards in bullet or short sentence form, not Q&A.  
-
-The output must always be in JSON with the following fields:  
-- "notebookName": the name of the notebook or topic.  
-- "numberOfCards": the total number of flashcards generated.  
-- "flashcards": a list of strings, each string representing one flashcard written in notes style
-
-The flashcards should:  
-- Be concise and easy to scan as refresher notes.  
-- Focus only on essential knowledge.  
-- Avoid long explanations, questions, or unnecessary detail.  
-- Maximum number of flashcards: 20
-
-NOTE: Flashcards should be in the form of short notes ie An information system is a system used to store information.
-
-Response Example: 
-{
-  "notebookName": "Biology Basics",
-  "numberOfCards": 3,
-  "flashcards": [
-    "The Cell is the basic structural and functional unit of life",
-    "The Mitochondria is the powerhouse of the cell, generates ATP",
-    "The Photosynthesis is the process by which plants convert sunlight into chemical energy"
-  ]
-}
-`,
+        model: flashcardModel,
+        systemInstruction: flashcardPrompt(),
         contents: texts,
         config: {
+        thinkingConfig:{
+          thinkingBudget:0
+        },
         responseMimeType: 'application/json',
         responseSchema: {
             type: Type.OBJECT,
@@ -163,11 +141,14 @@ Response Example:
 
 export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
   // prompt intent engine
-  console.log("running agent");
-  console.log(JSON.stringify(chatObj))
+  // console.log("running agent");
+  // console.log(JSON.stringify(chatObj))
+  // getting the model config according to plan
+  let plan = req.user.subscription
+  var modelLimits = getModelConfig(plan);
+  
   // naming the chat
-
-  if (chatObj.history.length > 2 && chatRef) {
+  if (chatObj.history.length > 1 && chatRef) {
     // Get the document snapshot
     const chatDoc = await chatRef.get();
   
@@ -203,13 +184,13 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
   chatObj.chunks = chatObj.chunks || {};
   let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
   let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
-  console.log(JSON.stringify(chatObj.history))
+  // console.log(JSON.stringify(chatObj.history))
   // console.log(summary)
   // format the files in the right way for Gemini.
   let inlineData;
   var isMedia;
-  if(req.files){
-    console.log("Inside run Agent before creating inlineData");
+  if(req.files.length>0){
+    console.log(`There are files:${req.files}`);
     inlineData = req.files.map((file)=>({mimeType:file.mimetype, data:Buffer.from(file.buffer).toString('base64')}));
     inlineData = inlineData.map((data)=>({inlineData:data}));
     console.log("Finished packaging inlineData");
@@ -219,7 +200,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
     message = message.concat(inlineData);
     console.log("concated text and inlinedata");
   }
-message = [{role:'user', parts:message}];
+  message = [{role:'user', parts:message}];
   let response = await ai.models.generateContent({
     model:'gemini-2.5-flash-lite',
     contents:message,
@@ -243,11 +224,12 @@ message = [{role:'user', parts:message}];
       }
     }
   })
-  console.log(response.text);
+  // console.log(response.text);
   let intentResult = JSON.parse(response.text);
   var aiMessageRef = db.collection('Message').doc()
   // To retrieve or not to retrieve
   if(!intentResult.isInDomain && intentResult.messageIfOutOfDomain){
+    console.log(`Message out of domain:${intentResult.messageIfOutOfDomain}`)
     chatObj.history.push({
       role: "model",
       parts: [
@@ -275,20 +257,20 @@ message = [{role:'user', parts:message}];
       model: 'gemini-embedding-exp-03-07',
       contents: [intentResult.ragQuery],
       taskType: 'RETRIEVAL_QUERY',
-      config: { outputDimensionality: 256 },
+      config: { outputDimensionality: modelLimits.vectorDim },
     });
     // Use the embedding from the intentResult.ragQuery for vector search in Qdrant
     // Assume embedding variable is the result of ai.models.embedContent for the query
     // embedding.embeddings[0].values is the vector for the query
     let queryVector = embedding.embeddings[0].values;
-    console.log(`Here is the notebookID:${data.notebookID}`)
+    // console.log(`Here is the notebookID:${data.notebookID}`)
     // Perform vector search in Qdrant
     let qdrantResults = await qdrantClient.search(data.notebookID, {
       vector: queryVector,
       limit: 5, // You can adjust the number of results as needed
       with_payload: true
     });
-    console.log(qdrantResults);
+    // console.log(qdrantResults);
     let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
     let chunkPaths = qdrantResults.map((result)=>(`${chunkBasePath}${result.payload.chunkID}.json`))
     //let chunk = await handleChunkRetrieval(`notebooks/${data.notebookID}/chunks/${qdrantResults[0].payload.chunkID}.json`)
@@ -328,11 +310,15 @@ message = [{role:'user', parts:message}];
     }
   };
   let agentResponse;
+  console.log(`This is the agentModel:${modelLimits.agentModel}`)
   while (true) {
     agentResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-pro',
+      model: modelLimits.agentModel,
       contents: message,
       config: {
+        thinkingConfig:{
+          thinkingBudget:modelLimits.thinkingBudget
+        },
         systemInstruction: prompt,
         tools: [
           {

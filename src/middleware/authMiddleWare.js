@@ -19,7 +19,7 @@ export const authMiddleWare = async(req, res, next)=>{
         let userDoc = await db.collection('User').doc(idToken.uid).get();
         let userRef = userDoc.data();
         let plan = userRef && userRef.subscription ? userRef.subscription : 'free';
-    
+        console.log(`This is the plan:${plan}`)
         // console.log('Authotizationmiddleware--Plan: ',plan )
         req.user = {
             uid:idToken.uid,

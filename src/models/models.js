@@ -4,9 +4,10 @@ import { createFlashcardsQuery, createQuizQuery } from './query.js';
 import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
 import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
-import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt } from '../config/types.js';
-import { text } from 'express';
+import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt, promptPrefix } from '../config/types.js';
 import { getModelConfig } from '../config/plans.js';
+import { performance } from 'perf_hooks';
+
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -131,77 +132,69 @@ export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, 
     }
 }
 
-export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
-  // prompt intent engine
-  // console.log("running agent");
-  // console.log(JSON.stringify(chatObj))
-  // getting the model config according to plan
-  let plan = req.user.subscription
+export const handleRunAgent = async (req, data, chatObj, chatRef) => {
+  let plan = req.user.subscription;
   var modelLimits = getModelConfig(plan);
-  
+  var totalTime  = 0;
+  let history = chatObj.history.slice(0, chatObj.history.length - 1);
+  let intentCompleteMessage = promptPrefix(history, chatObj.chunks);
   // naming the chat
   if (chatObj.history.length > 1 && chatRef) {
-    // Get the document snapshot
     const chatDoc = await chatRef.get();
-  
     if (chatDoc.exists) {
       const data = chatDoc.data();
-  
       if (data.title === "default") {
-        
+        const startTime = performance.now();
         let title = await ai.models.generateContent({
-          model:'gemini-2.0-flash',
-          contents:JSON.stringify(chatObj.history),
-          config:{
-            systemInstruction:chatNamingPrompt(chatObj)
+          model: 'gemini-2.0-flash',
+          contents: JSON.stringify(chatObj.history),
+          config: {
+            systemInstruction: chatNamingPrompt(chatObj)
           }
-        })
-      // Update the chatRef title field with the new title
-      if (title && title.text && typeof title.text === "string") {
-        const newTitle = title.text.trim().replace(/^"|"$/g, ''); // Remove surrounding quotes if present
-        await chatRef.update({ title: newTitle });
-        console.log(`Chat title updated to: ${newTitle}`);
-      }
+        });
+        const endTime = performance.now();
+        console.log(`gemini-2.0-flash (naming) latency: ${endTime - startTime} ms`);
+
+        if (title && title.text && typeof title.text === "string") {
+          const newTitle = title.text.trim().replace(/^"|"$/g, '');
+          await chatRef.update({ title: newTitle });
+        }
       }
     }
   }
-  /*
-  The prompt intent Engine needs all these
-  - notebook summary
-  - conversation history
-  - currently retrieved chunks (to prevent unneeded retrieval)  
-  */
-  // Ensure required structures exist on chatObj
+
   chatObj.history = chatObj.history || [];
   chatObj.chunks = chatObj.chunks || {};
   let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
   let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
-  // console.log(JSON.stringify(chatObj.history))
-  // console.log(summary)
-  // format the files in the right way for Gemini.
+
   let inlineData;
   var isMedia;
-  if(req.files.length>0){
-    console.log(`There are files:${req.files}`);
-    inlineData = req.files.map((file)=>({mimeType:file.mimetype, data:Buffer.from(file.buffer).toString('base64')}));
-    inlineData = inlineData.map((data)=>({inlineData:data}));
-    console.log("Finished packaging inlineData");
+  if (req.files.length > 0) {
+    inlineData = req.files.map((file) => ({ mimeType: file.mimetype, data: Buffer.from(file.buffer).toString('base64') }));
+    inlineData = inlineData.map((data) => ({ inlineData: data }));
   }
-  let message = [{text:data.text}];
-  if(inlineData){
+
+  let message = [{ text: data.text }];
+  if (inlineData) {
     message = message.concat(inlineData);
     console.log("concated text and inlinedata");
   }
-  message = [{role:'user', parts:message}];
+  message = [{ role: 'user', parts: message }];
+
+  const intentStartTime = performance.now();
   let response = await ai.models.generateContent({
-    model:'gemini-2.5-flash-lite',
-    contents:message,
-    config:{
-      systemInstruction:intentPrompt(chatObj, summary),
-      responseMimeType:'application/json',
-      responseSchema:{
+    model: 'gemini-2.5-flash-lite',
+    contents: intentCompleteMessage.concat(message),
+    config: {
+      thinkingConfig:{
+        thinkingBudget:0
+      },
+      systemInstruction: intentPrompt(summary),
+      responseMimeType: 'application/json',
+      responseSchema: {
         type: Type.OBJECT,
-        properties:{
+        properties: {
           isInDomain: { type: Type.BOOLEAN },
           messageIfOutOfDomain: { type: Type.STRING },
           retrievalNeeded: { type: Type.BOOLEAN },
@@ -215,13 +208,16 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
         ]
       }
     }
-  })
-  // console.log(response.text);
+  });
+  console.log(`Intent Prompt Token count: ${response.usageMetadata.promptTokenCount}`)
+  const intentEndTime = performance.now();
+  console.log(`gemini-2.5-flash-lite (intent) latency: ${intentEndTime - intentStartTime} ms`);
+  totalTime += intentEndTime-intentStartTime;
   let intentResult = JSON.parse(response.text);
-  var aiMessageRef = db.collection('Message').doc()
-  // To retrieve or not to retrieve
-  if(!intentResult.isInDomain && intentResult.messageIfOutOfDomain){
-    console.log(`Message out of domain:${intentResult.messageIfOutOfDomain}`)
+  var aiMessageRef = db.collection('Message').doc();
+
+  if (!intentResult.isInDomain && intentResult.messageIfOutOfDomain) {
+    console.log(`Message out of domain:${intentResult.messageIfOutOfDomain}`);
     chatObj.history.push({
       role: "model",
       parts: [
@@ -231,85 +227,88 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
       ],
     });
     aiMessageRef.set({
-      chatID:chatRef,
-      content:JSON.stringify([{text:intentResult.messageIfOutOfDomain}]),
-      references:[],
-      attachments:[],
-      role:'model',
-      timestamp:admin.firestore.FieldValue.serverTimestamp()
-    })
-    let agentResponse = {message:intentResult.messageIfOutOfDomain}
-    return agentResponse
+      chatID: chatRef,
+      content: JSON.stringify([{ text: intentResult.messageIfOutOfDomain }]),
+      references: [],
+      attachments: [],
+      role: 'model',
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+    let agentResponse = { message: intentResult.messageIfOutOfDomain };
+    return agentResponse;
   }
-  console.log('Prompt is in Domain');
-  // check if retrieval is needed
-  if(intentResult.retrievalNeeded){
-    // pass to the retrieval component
+
+  if (intentResult.retrievalNeeded) {
+    console.log(`Inside retrieval:${intentResult.ragQuery}`)
+    const embeddingStartTime = performance.now();
     let embedding = await ai.models.embedContent({
       model: 'gemini-embedding-exp-03-07',
       contents: [intentResult.ragQuery],
       taskType: 'RETRIEVAL_QUERY',
       config: { outputDimensionality: modelLimits.vectorDim },
     });
-    // Use the embedding from the intentResult.ragQuery for vector search in Qdrant
-    // Assume embedding variable is the result of ai.models.embedContent for the query
-    // embedding.embeddings[0].values is the vector for the query
+    const embeddingEndTime = performance.now();
+    console.log(`gemini-embedding-exp-03-07 latency: ${embeddingEndTime - embeddingStartTime} ms`);
+    totalTime += embeddingEndTime - embeddingStartTime;
+    let queryStartTime = performance.now();
     let queryVector = embedding.embeddings[0].values;
-    // console.log(`Here is the notebookID:${data.notebookID}`)
-    // Perform vector search in Qdrant
     let qdrantResults = await qdrantClient.search(data.notebookID, {
       vector: queryVector,
-      limit: 5, // You can adjust the number of results as needed
+      limit: 5,
       with_payload: true
     });
-    // console.log(qdrantResults);
+    let queryEndTime = performance.now();
+    console.log(`vector retrieval time:${queryEndTime-queryStartTime}ms`);
+    totalTime += queryEndTime - queryStartTime;
+    
     let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
-    let chunkPaths = qdrantResults.map((result)=>(`${chunkBasePath}${result.payload.chunkID}.json`))
-    //let chunk = await handleChunkRetrieval(`notebooks/${data.notebookID}/chunks/${qdrantResults[0].payload.chunkID}.json`)
+    let chunkPaths = qdrantResults.map((result) => (`${chunkBasePath}${result.payload.chunkID}.json`));
+    let chunkStartTime = performance.now();
     let chunks = await handleBulkChunkRetrieval(chunkPaths);
-    // console.log(chunks);
-    // get the chunks
+    let chunkLatency = performance.now() - chunkStartTime;
+    totalTime += chunkLatency;
+    console.log(`Chunk retrieval latency:${chunkLatency}`);
 
-    // Add the chunks to the chat obj
-    chunks.forEach((chunk, index)=>{
+    chunks.forEach((chunk, index) => {
       const chunkId = qdrantResults[index]?.payload?.chunkID;
-      if(chunkId){
+      if (chunkId) {
         const text = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
-        chatObj.chunks[chunkId] = text.slice(0,500);
+        chatObj.chunks[chunkId] = text.slice(0, 500);
       }
-    })
-
+    });
   }
 
-  // Always proceed to the Agent phase (with or without new retrieval)
-  let prompt = agentPrompt(chatObj);
+  let prompt = agentPrompt();
+  let completeMessage = promptPrefix(history, chatObj.chunks);
   let videoGenFunctionDeclaration = {
     name: 'video_gen',
     description: 'Generates a video for math concept explanations',
     parameters: {
-        type: Type.OBJECT,
-        properties:{
-          className:{
-            type:Type.STRING,
-            description:'The name of the class to be passed to manim command to render the scene'
-          },
-          code:{
-            type:Type.STRING,
-            description:'The manim code written in python, properly formatted obeying Python syntax'
-          },
+      type: Type.OBJECT,
+      properties: {
+        className: {
+          type: Type.STRING,
+          description: 'The name of the class to be passed to manim command to render the scene'
         },
-        required:['className', 'code']       
+        code: {
+          type: Type.STRING,
+          description: 'The manim code written in python, properly formatted obeying Python syntax'
+        },
+      },
+      required: ['className', 'code']
     }
   };
   let agentResponse;
-  console.log(`This is the agentModel:${modelLimits.agentModel}`)
+  console.log(`This is the agentModel:${modelLimits.agentModel}`);
   while (true) {
+
+    const agentStartTime = performance.now();
     agentResponse = await ai.models.generateContent({
       model: modelLimits.agentModel,
-      contents: message,
+      contents: completeMessage.concat(message),
       config: {
-        thinkingConfig:{
-          thinkingBudget:modelLimits.thinkingBudget
+        thinkingConfig: {
+          thinkingBudget: modelLimits.thinkingBudget
         },
         systemInstruction: prompt,
         tools: [
@@ -319,28 +318,32 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
         ]
       }
     });
-    
+    const agentEndTime = performance.now();
+    console.log(`${modelLimits.agentModel} (agent) latency: ${agentEndTime - agentStartTime} ms`);
+    totalTime += agentEndTime - agentStartTime
+    console.log(`TOTAL latency: ${totalTime}ms`)
     if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
-      const functionCall = agentResponse.functionCalls[0]; // Assuming one function call
+      const functionCall = agentResponse.functionCalls[0];
       console.log(`Function to call: ${functionCall.name}`);
       console.log(`Arguments: ${functionCall.args.code}`);
-      // You may want to process the function call here and update `message` accordingly
-      // For now, just return the function call as before
-      // Send the functionCall to http://172.30.182.137:8000
       var functionResponsePart;
       try {
+        const videoGenStartTime = performance.now();
         const response = await fetch('http://172.30.182.137:8000/render', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({...functionCall.args, userID:req.user.uid, messageID:aiMessageRef.id})
+          body: JSON.stringify({ ...functionCall.args, userID: req.user.uid, messageID: aiMessageRef.id })
         });
+        const videoGenEndTime = performance.now();
+        console.log(`Video generation server latency: ${videoGenEndTime - videoGenStartTime} ms`);
+
         if (!response.ok) {
           functionResponsePart = {
             name: functionCall.name,
             response: {
               result: "video generation failed, internal server error",
             },
-          }
+          };
           console.error("Error sending function call to video gen server:", response.status, response.statusText);
         } else {
           const data = await response.json();
@@ -351,7 +354,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
             response: {
               result: "video generation has been generated",
             },
-          }
+          };
         }
       } catch (err) {
         functionResponsePart = {
@@ -359,7 +362,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
           response: {
             result: `video generation failed. [ERROR]:${err}`,
           },
-        }
+        };
         console.error("Failed to send function call to video gen server:", err);
       }
       chatObj.history.push({
@@ -378,24 +381,24 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
           },
         ],
       });
-      // save the ai response to the db
+
       let aiFunctionCallRef = await db.collection('Message').add({
-        chatID:chatRef,
-        content:JSON.stringify(functionCall),
-        references:[],
-        attachments:[],
-        role:'model',
-        timestamp:admin.firestore.FieldValue.serverTimestamp()
-      })
+        chatID: chatRef,
+        content: JSON.stringify(functionCall),
+        references: [],
+        attachments: [],
+        role: 'model',
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
       let functionResponse = await db.collection('Message').add({
-        chatID:chatRef,
-        content:JSON.stringify(functionResponsePart),
-        references:[],
-        attachments:[],
-        role:'system',
-        timestamp:admin.firestore.FieldValue.serverTimestamp()
-    })
-        // Update the message variable to include the function call result and call
+        chatID: chatRef,
+        content: JSON.stringify(functionResponsePart),
+        references: [],
+        attachments: [],
+        role: 'system',
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+
       let messagefunc = [
         agentResponse.candidates[0].content,
         {
@@ -407,26 +410,23 @@ export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
           ],
         },
       ];
-      message.push(...messagefunc)
-      // return functionCall;
+      message.push(...messagefunc);
     } else {
-      chatObj.history.push({role:"model", parts:[{text:agentResponse.text}]})
-      // console.log(JSON.stringify(chatObj.history));
-      // return agentResponse
+      console.log(`Agent prompt token count:${agentResponse.usageMetadata.promptTokenCount}`)
+      chatObj.history.push({ role: "model", parts: [{ text: agentResponse.text }] });
       break;
     }
   }
-  // console.log(agentResponse.text)
-  // save to db
+
   aiMessageRef.set({
-    chatID:chatRef,
-    content:JSON.stringify([{text:agentResponse.text}]),
-    references:[],
-    attachments:[],
-    role:'model',
-    timestamp:admin.firestore.FieldValue.serverTimestamp()
-  })
-  return {message:agentResponse.text, media:isMedia}
+    chatID: chatRef,
+    content: JSON.stringify([{ text: agentResponse.text }]),
+    references: [],
+    attachments: [],
+    role: 'model',
+    timestamp: admin.firestore.FieldValue.serverTimestamp()
+  });
+  return { message: agentResponse.text, media: isMedia };
 }
 
 

@@ -395,7 +395,9 @@ function buildConceptListing(conceptMapData) {
     });
 }
 
-async function resolveConceptContext({ notebookId, conceptId }) {
+
+
+export async function resolveConceptContext({ notebookId, conceptId }) {
     const notebookRef = db.collection('Notebook').doc(notebookId);
     const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
 
@@ -668,13 +670,28 @@ async function handleConceptChatCreate(req, res) {
 
         console.log('Concept chat reference materials:', referenceMaterialsPayload);
 
+        const chunksByMaterial = (conceptContext.chunks || []).reduce((acc, chunk) => {
+            const materialId = chunk.materialId?.toString();
+            if (materialId) {
+                if (!acc[materialId]) {
+                    acc[materialId] = [];
+                }
+                acc[materialId].push(chunk);
+            }
+            return acc;
+        }, {});
+
+        const referencesWithChunks = (conceptContext.materials || []).map(material => ({
+            ...material,
+            chunks: chunksByMaterial[material.materialId?.toString()] || [],
+        }));
+
         res.json({
             chatId: chatRef.id,
             conceptId,
             conceptName: conceptContext.conceptName,
             // conceptSummary: conceptContext.summary || '',
-            references: conceptContext.materials,
-            chunks: conceptContext.chunks,
+            references: referencesWithChunks,
         });
     } catch (err) {
         console.error('Error creating concept chat:', err);

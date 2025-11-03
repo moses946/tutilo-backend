@@ -1,4 +1,5 @@
 import admin, {db} from '../services/firebase.js';
+import qdrantClient from '../services/qdrant.js';
 
 export const createQuizQuery = async (chatId, quizData) => {
   const chatRef = db.collection('Chat').doc(chatId);
@@ -244,42 +245,73 @@ export const deleteNotebookQuery = async (notebookId) => {
     }
   
     const { materialRefs = [] } = notebookSnap.data();
-    if (!Array.isArray(materialRefs) || materialRefs.length === 0) {
-      // No materials → just delete the notebook and any flashcards
-      const flashcardsSnapshot = await db.collection('Flashcard')
-          .where('notebookID', '==', notebookRef)
-          .get();
-      
-      const batch = db.batch();
-      flashcardsSnapshot.forEach(doc => batch.delete(doc.ref));
-      if (!flashcardsSnapshot.empty) {
-          await batch.commit();
-      }
-      
-      await notebookRef.delete();
-      return;
-    }
-  
-    // materialRefs are already DocumentReferences
-    const materialSnaps = await Promise.all(materialRefs.map((ref) => ref.get()));
-  
-    // Collect all chunkRefs from materials
+
+    // Gather related Firestore docs
+    const [
+      conceptMapSnapshot,
+      flashcardsSnapshot,
+      chatsSnapshot
+    ] = await Promise.all([
+      db.collection('ConceptMap').where('notebookID', '==', notebookRef).get(),
+      db.collection('Flashcard').where('notebookID', '==', notebookRef).get(),
+      db.collection('Chat').where('notebookID', '==', notebookRef).get()
+    ]);
+
+    const chatRefs = chatsSnapshot.docs.map(d => d.ref);
+
+    // Fetch messages and quizzes linked to chats
+    const [messagesSnapshots, quizzesSnapshots] = await Promise.all([
+      Promise.all(chatRefs.map(ref => db.collection('Message').where('chatID', '==', ref).get())),
+      Promise.all(chatRefs.map(ref => db.collection('Quizzes').where('chatID', '==', ref).get()))
+    ]);
+
+    const messageRefs = messagesSnapshots.flatMap(s => s.docs.map(d => d.ref));
+    const quizRefs = quizzesSnapshots.flatMap(s => s.docs.map(d => d.ref));
+
+    // Materials and chunks
+    const materialSnaps = Array.isArray(materialRefs) && materialRefs.length > 0
+      ? await Promise.all(materialRefs.map((ref) => ref.get()))
+      : [];
+
     const chunkRefs = materialSnaps.flatMap((snap) => {
-      const { chunkRefs = [] } = snap.data() || {};
-      return chunkRefs; // These should also be DocumentReferences
+      const data = snap.data() || {};
+      return Array.isArray(data.chunkRefs) ? data.chunkRefs : [];
     });
-  
-    // Get all flashcards for this notebook (should be just one document now)
-    const flashcardsSnapshot = await db.collection('Flashcard')
-        .where('notebookID', '==', notebookRef)
-        .get();
-    
-    const flashcardRefs = flashcardsSnapshot.docs.map(doc => doc.ref);
-  
-    // Prepare all docs to delete: materials + chunks + flashcards
-    const docsToDelete = [...materialRefs, ...chunkRefs, ...flashcardRefs];
-  
-    // Firestore batch limit = 500 → chunk if needed
+
+    // Retrieve chunk qdrantPointIds
+    const chunkSnaps = chunkRefs.length > 0
+      ? await Promise.all(chunkRefs.map(ref => ref.get()))
+      : [];
+    const qdrantPointIds = chunkSnaps
+      .map(snap => (snap.exists ? (snap.data()?.qdrantPointId || null) : null))
+      .filter(Boolean);
+
+    // Qdrant deletion (best-effort)
+    if (qdrantPointIds.length > 0) {
+      try {
+        let batchSize = 100;
+        for (let i = 0; i < qdrantPointIds.length; i += batchSize) {
+          const ids = qdrantPointIds.slice(i, i + batchSize);
+          await qdrantClient.delete('notebook_chunks', { points: ids });
+          batchSize = Math.min(batchSize, qdrantPointIds.length - i);
+        }
+      } catch (err) {
+        console.warn('Failed to delete Qdrant points:', err?.message || err);
+      }
+    }
+
+    // Build list of all Firestore docs to delete
+    const docsToDelete = [
+      ...conceptMapSnapshot.docs.map(d => d.ref),
+      ...flashcardsSnapshot.docs.map(d => d.ref),
+      ...messageRefs,
+      ...quizRefs,
+      ...chunkRefs,
+      ...materialRefs,
+      ...chatRefs
+    ];
+
+    // Delete in Firestore batches (limit 500)
     let BATCH_SIZE = 500;
     for (let i = 0; i < docsToDelete.length; i += BATCH_SIZE) {
       const batch = db.batch();
@@ -287,10 +319,10 @@ export const deleteNotebookQuery = async (notebookId) => {
       BATCH_SIZE = Math.min(BATCH_SIZE, docsToDelete.length - i);
       await batch.commit();
     }
-  
+
     // Finally, delete the notebook itself
     await notebookRef.delete();
-    console.log(`Notebook with ID:${notebookId} has been deleted`);
+    console.log(`Notebook with ID:${notebookId} has been deleted (Firestore + Qdrant).`);
   };
 
 /*

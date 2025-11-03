@@ -3,6 +3,7 @@ import admin, { db } from '../services/firebase.js';
 import { handleRunAgent } from '../models/models.js';
 import { handleBulkFileUpload, upload } from '../utils/utility.js';
 import { createMessageQuery } from '../models/query.js';
+import { resolveConceptContext } from './NotebookRoutes.js';
 
 // In memory chat map store
 /* 

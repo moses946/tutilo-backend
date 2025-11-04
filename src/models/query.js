@@ -325,7 +325,7 @@ export const deleteNotebookQuery = async (notebookId) => {
 export const deleteChatQuery = async (chatId)=>{
     const chatRef = db.collection('Chat').doc(chatId);
     // get the messages
-    let messagesSnaps  = await db.collection('Chat').where('chatID', '==', chatId).get();
+    let messagesSnaps  = await db.collection('Message').where('chatID', '==', chatId).get();
     let messagesRefs = messagesSnaps.docs.map(doc=>doc.ref)
     const docsToDelete = [...messagesRefs];
     const BATCH_SIZE = 500;
@@ -352,6 +352,7 @@ export const deleteChatQuery = async (chatId)=>{
   
     // Finally, delete the chat itself
     await chatRef.delete();
+    console.log('chat and messages deleted')
 }
 /*
 This function creates a single flashcard document in Firestore containing all flashcards for a notebook
@@ -389,7 +390,7 @@ export const createMessageQuery = async (data)=>{
         chatID:data.chatRef,
         content:JSON.stringify([{text:data.message}]),
         references:[],
-        attachments:[],
+        attachments:data.attachments || [],
         role:data.role,
         timestamp:admin.firestore.FieldValue.serverTimestamp()
     })

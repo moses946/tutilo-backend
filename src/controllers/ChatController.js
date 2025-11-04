@@ -81,8 +81,10 @@ export async function handleDeleteChat(req, res){
             return res.status(400).json({message:'womp womp'})
         }
         // delete chat related stuff on db
+        console.log(`Deleting chat query`);
         await deleteChatQuery(chatID);
         await bucket.deleteFiles({prefix:`notebooks/${notebookID}/chats/${chatID}/`})
+        console.log(`Deleting bucket files`);
         res.status(200).json({message: 'Chat deleted successfully'});
     }catch(err){
         console.log(`[ERROR]:${err}`);

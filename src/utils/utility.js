@@ -235,7 +235,6 @@ export const handleNotebookUpdate = async(notebookID, materialRefs)=>{
 export const handleNotebookDeletion = async (notebookId)=>{
     try{
 
-        await deleteNotebookQuery(notebookId);
         // get the chats and bulk delete
         let chatSnaps = await db.collection('Chat').where('notebookID', '==', notebookId).get();
         let chatIds = chatSnaps.docs.map((doc)=>doc.id);
@@ -244,8 +243,10 @@ export const handleNotebookDeletion = async (notebookId)=>{
         await bucket.deleteFiles({prefix:`videos/${notebookId}/`})
         // delete the qdrant collection
         await qdrantClient.deleteCollection(notebookId);
+        await deleteNotebookQuery(notebookId);
         console.log(`Notebook Deletion was a success:${notebookId}`);
     }catch(err){
+        // switch it back to isDeleted false
         console.error('Notebook deletion failed:', err);
     }
 }

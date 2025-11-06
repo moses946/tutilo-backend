@@ -25,6 +25,7 @@ export const createNotebookQuery = async (notebook) => {
         userID: userRef,
         dateCreated: now,
         dateUpdated: now,
+        isDeleted:false,
         materialRefs: [], // Will be populated with material references
         status: 'processing',
         links: Array.isArray(notebook.links) ? notebook.links : [],
@@ -125,7 +126,7 @@ read queries
 export const readNotebooksQuery = async (userID) =>{
     let userRef = db.collection('User').doc(userID);
     // Fetch all notebooks where the userID field matches the given userID
-    let notebookRefs = await db.collection('Notebook').where('userID', '==', userRef).get();
+    let notebookRefs = await db.collection('Notebook').where('userID', '==', userRef).where('isDeleted', '==',false).get();
     const notebooks = [];
     notebookRefs.forEach(doc => {
         const data = doc.data();

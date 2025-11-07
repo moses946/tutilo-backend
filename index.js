@@ -1,6 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import notebookRouter, { handleMaterialDownload } from './src/routes/NotebookRoutes.js';
+import notebookRouter from './src/routes/NotebookRoutes.js';
 import authRouter from './src/routes/AuthRoutes.js';
 import billingRouter from './src/routes/BillingRoutes.js';
 import userRouter from './src/routes/UserRoutes.js';
@@ -14,6 +14,7 @@ import http from "http";
 import { WebSocketServer } from 'ws';
 import url from "url";
 import { verifyToken } from './src/services/firebase.js';
+import { handleMaterialDownload } from './src/controllers/NotebookController.js';
 
 
 
@@ -76,7 +77,7 @@ app.get('/api/v1/notebooks/:id/materials/:materialId/download', handleMaterialDo
 app.use('/api/v1/notebooks', authMiddleWare, notebookRouter);
 app.use('/api/v1/chats', authMiddleWare, chatRouter);
 app.use('/api/v1/auth', authRouter);
-app.use('/api/v1/billing', billingRouter);
+app.use('/api/v1/billing', authMiddleWare, billingRouter);
 app.use('/api/v1/users', userRouter);
 app.use('/api/v1/quizzes', quizRouter);
 app.use('/api/v1/flashcards', flashcardsRouter);

@@ -1,64 +1,62 @@
 import express from 'express';
-import admin, { bucket, db } from '../services/firebase.js';
-import {upload, handleEmbedding, handleFileUpload, handleBulkFileUpload, handleBulkChunkUpload, handleChunkEmbeddingAndStorage, generateSignedUrl, handleBulkChunkRetrieval} from '../utils/utility.js'
-import extractPdfText from '../utils/chunking.js'
-import { 
-    createMaterialQuery, 
-    createNotebookQuery, 
-    createChunksQuery, 
-    updateNotebookWithMaterials, 
-    updateMaterialWithChunks,
-    updateChunksWithQdrantIds,
-    deleteNotebookQuery,
-    readNotebooksQuery,
-    createConceptMapQuery,
-    updateNotebookWithFlashcards,
-    updateNotebookMetadata,
-    removeMaterialFromNotebook
+import {upload} from '../utils/utility.js'
+import { planLimits } from '../config/plans.js';
 
-} from '../models/query.js';
-import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGeneration } from '../models/models.js';
+import { handleConceptChatCreate, handleConceptDetail, handleConceptList, handleConceptMapRetrieval, handleMaterialDownload, handleNotebookCreation, handleNotebookDeletion, handleNotebookEditFetch, handleNotebookFetch, handleNotebookRead, handleNotebookUpdate, handleUserProgressUpdate } from '../controllers/NotebookController.js';
 
 
+// Helper to convert MB to bytes
+const MB_TO_BYTES = (mb) => mb * 1024 * 1024;
+async function validateUploads(req, res, next) {
+    // This assumes an authentication middleware has already run and populated req.user
+    if (!req.user || !req.user.subscription) {
+        return res.status(401).json({ error: 'Authentication required.' });
+    }
 
-const notebookRouter = express.Router();
-notebookRouter.post('/', upload.array('files'), handleNotebookCreation);
-notebookRouter.delete('/:id', handleNotebookDeletion);
-notebookRouter.put('/:id', upload.array('files'),handleNotebookUpdate)
-notebookRouter.get('/', async (req, res)=>{
-    try{
-        // change this later to use req.user
-        let userID = req.query.id || req.body.id;
-        
-        if (!userID) {
-            return res.status(400).json({
-                error: 'User ID is required',
-                message: 'Please provide user ID as query parameter or in request body'
-            });
-        }
-        
-        let result = await readNotebooksQuery(userID);
-        res.json(result);
-    }catch(err){
-        console.log(`Error while fetching notebooks:${err}`);
-        res.status(500).json({
-            error: 'Failed to fetch notebooks',
-            details: err.message
+    const subscription = req.user.subscription; // 'free' or 'plus'
+    const limits = planLimits[subscription];
+
+    if (!limits) {
+        return res.status(403).json({ error: 'Invalid subscription plan.' });
+    }
+
+    const files = req.files;
+
+    // 1. Check file count
+    if (files.length > limits.maxFiles) {
+        return res.status(413).json({
+            error: 'File count limit exceeded.',
+            message: `Your '${subscription}' plan allows up to ${limits.maxFiles} files per upload. You tried to upload ${files.length}.`
         });
     }
-});
+
+    // 2. Check individual file sizes
+    const maxFileSizeInBytes = MB_TO_BYTES(limits.maxFileSizeMB);
+    for (const file of files) {
+        if (file.size > maxFileSizeInBytes) {
+            return res.status(413).json({
+                error: 'File size limit exceeded.',
+                message: `The file "${file.originalname}" is too large. Your '${subscription}' plan allows files up to ${limits.maxFileSizeMB} MB.`
+            });
+        }
+    }
+    console.log('file checks passed')
+    // If all checks pass, proceed to the main handler
+    next();
+}
+const notebookRouter = express.Router();
+notebookRouter.post('/', upload.array('files'),validateUploads, handleNotebookCreation);
+notebookRouter.delete('/:id', handleNotebookDeletion);
+notebookRouter.put('/:id', upload.array('files'), validateUploads,handleNotebookUpdate)
+notebookRouter.get('/', handleNotebookRead);
 notebookRouter.get('/:id', handleNotebookFetch);
 notebookRouter.get('/:id/edit', handleNotebookEditFetch);
-// notebookRouter.get('/:id/materials', handleNotebookMaterialsList);
-// notebookRouter.delete('/:id/materials/:materialId', handleMaterialDeletion);
-notebookRouter.patch('/:id', (req, res)=>{});
 notebookRouter.delete('/:id', handleNotebookDeletion);
 notebookRouter.get('/:id/conceptMap', handleConceptMapRetrieval);
 notebookRouter.get('/:id/concepts', handleConceptList);
 notebookRouter.get('/:id/concepts/:conceptId', handleConceptDetail);
 notebookRouter.post('/:id/concepts/:conceptId/chat', handleConceptChatCreate);
 notebookRouter.get('/:id/materials/:materialId/download', handleMaterialDownload);
-
 notebookRouter.put('/:id/concepts/:conceptId/progress', handleUserProgressUpdate);
 
 async function handleNotebookCreation(req, res){

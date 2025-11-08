@@ -326,7 +326,7 @@ export const deleteNotebookQuery = async (notebookId) => {
 export const deleteChatQuery = async (chatId)=>{
     const chatRef = db.collection('Chat').doc(chatId);
     // get the messages
-    let messagesSnaps  = await db.collection('Message').where('chatID', '==', chatId).get();
+    let messagesSnaps  = await db.collection('Message').where('chatID', '==', chatRef).get();
     let messagesRefs = messagesSnaps.docs.map(doc=>doc.ref)
     const docsToDelete = [...messagesRefs];
     const BATCH_SIZE = 500;
@@ -389,8 +389,8 @@ export const updateNotebookWithFlashcards = async (notebookRef, flashcardRef) =>
 export const createMessageQuery = async (data)=>{
     let aiMessageRef = await db.collection('Message').add({
         chatID:data.chatRef,
-        content:JSON.stringify([{text:data.message}]),
-        references:[],
+        content:JSON.stringify(data.content),
+        references:data.references || [],
         attachments:data.attachments || [],
         role:data.role,
         timestamp:admin.firestore.FieldValue.serverTimestamp()

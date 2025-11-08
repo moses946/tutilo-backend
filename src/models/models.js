@@ -300,6 +300,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
   };
   let agentResponse;
   console.log(`This is the agentModel:${modelLimits.agentModel}`);
+  var isGeneratingMedia = false;
   while (true) {
 
     const agentStartTime = performance.now();
@@ -325,45 +326,48 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
     if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
       const functionCall = agentResponse.functionCalls[0];
       console.log(`Function to call: ${functionCall.name}`);
-      console.log(`Arguments: ${functionCall.args.code}`);
       var functionResponsePart;
-      try {
-        const videoGenStartTime = performance.now();
-        const response = await fetch('http://172.30.182.137:8000/render', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...functionCall.args, userID: req.user.uid, messageID: aiMessageRef.id })
-        });
-        const videoGenEndTime = performance.now();
-        console.log(`Video generation server latency: ${videoGenEndTime - videoGenStartTime} ms`);
-
-        if (!response.ok) {
+      if(functionCall.name=='video_gen'){
+        try {
+          const videoGenStartTime = performance.now();
+          const response = await fetch('http://172.30.182.137:8000/render', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...functionCall.args, userID: req.user.uid, messageID: aiMessageRef.id })
+          });
+          const videoGenEndTime = performance.now();
+          console.log(`Video generation server latency: ${videoGenEndTime - videoGenStartTime} ms`);
+  
+          if (!response.ok) {
+            functionResponsePart = {
+              name: functionCall.name,
+              response: {
+                result: "video generation failed, internal server error",
+              },
+            };
+            console.error("Error sending function call to video gen server:", response.status, response.statusText);
+          } else {
+            const data = await response.json();
+            isMedia = true;
+            console.log("Video generation server responded:", data);
+            functionResponsePart = {
+              name: functionCall.name,
+              response: {
+                result: "video generation has been generated",
+              },
+            };
+            isGeneratingMedia = true;
+          }
+        } catch (err) {
           functionResponsePart = {
             name: functionCall.name,
             response: {
-              result: "video generation failed, internal server error",
+              result: `video generation failed. [ERROR]:${err}`,
             },
           };
-          console.error("Error sending function call to video gen server:", response.status, response.statusText);
-        } else {
-          const data = await response.json();
-          isMedia = true;
-          console.log("Video generation server responded:", data);
-          functionResponsePart = {
-            name: functionCall.name,
-            response: {
-              result: "video generation has been generated",
-            },
-          };
-        }
-      } catch (err) {
-        functionResponsePart = {
-          name: functionCall.name,
-          response: {
-            result: `video generation failed. [ERROR]:${err}`,
-          },
-        };
-        console.error("Failed to send function call to video gen server:", err);
+          console.error("Failed to send function call to video gen server:", err);
+      }
+     
       }
       chatObj.history.push({
         role: "model",
@@ -426,7 +430,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
     role: 'model',
     timestamp: admin.firestore.FieldValue.serverTimestamp()
   });
-  return { message: agentResponse.text, media: isMedia };
+  return { message: !isGeneratingMedia?agentResponse.text:'Your video is being created, horera hanini', media: isMedia };
 }
 
 

@@ -1,17 +1,44 @@
 import { clientSocketsMap } from "../../index.js";
+import { agentLoop } from "../models/models.js";
 import { createMessageQuery } from "../models/query.js";
 import { db } from "../services/firebase.js";
 import { chatMap } from "./ChatController.js";
 
 export async function videoReadyWebhook(req, res) {
-    const { jobId, status, videoUrl, userID, messageID,errorLog } = req.body;
-    console.log(`Received webhook for job ${jobId}: Status - ${status}: VideoURL - ${videoUrl}, userId:${userID}, messageId:${messageID}`);
+    const { jobId, status, videoUrl, userID, chatId, errorLog } = req.body;
+    console.log(`Received webhook for job ${jobId}: Status - ${status}: VideoURL - ${videoUrl}, userId:${userID}, chatId:${chatId}`);
     let client_sockets = clientSocketsMap.get(userID)
-    let messageRef = db.collection('Message').doc(messageID)
-    var aiMessageData = (await messageRef.get()).data()
-    var aiMessage = JSON.parse(aiMessageData.content)[0]
+    // get the chat ref
+    let chatObj = chatMap.get(chatId);
+    var chatRef = db.collection('Chat').doc(chatId);
+    // create the function response part 
+    var functionResponsePart;
+    if(errorLog && !(status=='completed')){
+        functionResponsePart = {
+            name: 'video_gen',
+            response: {
+              result: `video generation failed. [ERROR]:${errorLog}`,
+            }
+        };
+    }else{
+        functionResponsePart = {
+            name:'video_gen',
+            response:{
+                result:`video generation status:${status}`
+            }
+        }
+    }
+    let functionResponse = {
+        role:'system',
+        parts:[
+            {
+                functionResponse: functionResponsePart,
+              },
+        ]
+    }
+    var response = await agentLoop(userID, chatObj, chatRef, [functionResponse])
     try{
-        console.log(`Here is the socket:${client_sockets} -- message id:${messageID}`)
+        console.log(`Here is the socket:${client_sockets} -- message id:${chatId}`)
         // get the message ref and update
         if(errorLog && client_sockets){
             console.log(`Error from video_gen service:${errorLog}`);
@@ -19,24 +46,23 @@ export async function videoReadyWebhook(req, res) {
         }
         for(const socket of client_sockets){
             try{
-                socket.send(JSON.stringify({event:'video-ready', message:{videoUrl, content:aiMessage.text}, status:200}))
+                socket.send(JSON.stringify({event:'video-ready', message:{videoUrl, content:response.message}, status:200}))
             }catch(err){
                 console.log(`[ERROR]:${err}`);
             }
         }
-        await messageRef.update({attachments:[{mediaUrl:videoUrl, status:200}]})
+        await response.messageRef.update({attachments:[{mediaUrl:videoUrl, status:200}]})
     }catch(err){
         console.log(`[ERROR]:${err}`)
         if(client_sockets){           
-            await messageRef.update({attachments:[{status:500, url:null}]});
-            let chatRef = aiMessageData.chatID;
+            await response.messageRef.update({attachments:[{status:500, url:null}]});
             let chatObj = chatMap.get(chatRef.id);
             chatObj.history.push({role:'system', parts:[{text:'Video generation has failed'}]});
             let data = {chatRef:chatRef,role:'system', content:[{text:'Video generation has failed'}]};
             await createMessageQuery(data)
 
             for(const socket of client_sockets){
-                socket.send(JSON.stringify({event:'video-ready', message:{videoUrl}, status:500}))
+                socket.send(JSON.stringify({event:'video-ready', message:{videoUrl, content:response.message}, status:500}))
             }
         }
     }

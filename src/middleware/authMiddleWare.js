@@ -1,5 +1,6 @@
 import { app, db, verifyToken } from "../services/firebase.js"
 
+export var userMap = new Map();
 export const authMiddleWare = async(req, res, next)=>{
     try{
         let authHeader = req.headers.authorization;
@@ -14,6 +15,7 @@ export const authMiddleWare = async(req, res, next)=>{
             res.status(401).json({message:'unauthorized'});
             return
         }
+        
         // tried to do custom claims, but did not work 
         // let plan = idToken.claims ? idToken.claims.plan:'free'
         let userDoc = await db.collection('User').doc(idToken.uid).get();
@@ -26,6 +28,12 @@ export const authMiddleWare = async(req, res, next)=>{
             email:idToken.email,
             subscription:plan
         };
+        let userObj = userMap.get(idToken.uid);
+        if(!userObj){
+            console.log(`Setting user obj`)
+            userMap.set(idToken.uid, {plan})
+        }
+        console.log(`Got the user obj:${JSON.stringify(userObj)}`);
     }catch(err){
         console.log('Error while verifying token', err);
         res.sendStatus(500)

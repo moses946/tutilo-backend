@@ -395,6 +395,7 @@ export const createMessageQuery = async (data)=>{
         role:data.role,
         timestamp:admin.firestore.FieldValue.serverTimestamp()
     })
+    return aiMessageRef
 }
 
 // User collection related routes

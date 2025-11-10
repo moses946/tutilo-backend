@@ -1,12 +1,13 @@
 import 'dotenv/config';
 import { GoogleGenAI, Type } from "@google/genai";
-import { createFlashcardsQuery, createQuizQuery } from './query.js';
+import { createFlashcardsQuery, createMessageQuery, createQuizQuery } from './query.js';
 import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
-import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
-import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt, promptPrefix } from '../config/types.js';
+import { handleBulkChunkRetrieval, handleChunkRetrieval, handleSendToVideoGen } from '../utils/utility.js';
+import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt, promptPrefix, videoGenFunctionDeclaration } from '../config/types.js';
 import { getModelConfig } from '../config/plans.js';
 import { performance } from 'perf_hooks';
+import { userMap } from '../middleware/authMiddleWare.js';
 
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
@@ -278,159 +279,12 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
     });
   }
 
-  let prompt = agentPrompt();
-  let completeMessage = promptPrefix(history, chatObj.chunks);
-  let videoGenFunctionDeclaration = {
-    name: 'video_gen',
-    description: 'Generates a video for math concept explanations',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        className: {
-          type: Type.STRING,
-          description: 'The name of the class to be passed to manim command to render the scene'
-        },
-        code: {
-          type: Type.STRING,
-          description: 'The manim code written in python, properly formatted obeying Python syntax'
-        },
-      },
-      required: ['className', 'code']
-    }
-  };
-  let agentResponse;
+  var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)
+
+
   console.log(`This is the agentModel:${modelLimits.agentModel}`);
-  var isGeneratingMedia = false;
-  while (true) {
-
-    const agentStartTime = performance.now();
-    agentResponse = await ai.models.generateContent({
-      model: modelLimits.agentModel,
-      contents: completeMessage.concat(message),
-      config: {
-        thinkingConfig: {
-          thinkingBudget: modelLimits.thinkingBudget
-        },
-        systemInstruction: prompt,
-        tools: [
-          {
-            functionDeclarations: [videoGenFunctionDeclaration]
-          }
-        ]
-      }
-    });
-    const agentEndTime = performance.now();
-    console.log(`${modelLimits.agentModel} (agent) latency: ${agentEndTime - agentStartTime} ms`);
-    totalTime += agentEndTime - agentStartTime
-    console.log(`TOTAL latency: ${totalTime}ms`)
-    if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
-      const functionCall = agentResponse.functionCalls[0];
-      console.log(`Function to call: ${functionCall.name}`);
-      var functionResponsePart;
-      if(functionCall.name=='video_gen'){
-        try {
-          const videoGenStartTime = performance.now();
-          const response = await fetch('http://172.30.182.137:8000/render', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...functionCall.args, userID: req.user.uid, messageID: aiMessageRef.id })
-          });
-          const videoGenEndTime = performance.now();
-          console.log(`Video generation server latency: ${videoGenEndTime - videoGenStartTime} ms`);
   
-          if (!response.ok) {
-            functionResponsePart = {
-              name: functionCall.name,
-              response: {
-                result: "video generation failed, internal server error",
-              },
-            };
-            console.error("Error sending function call to video gen server:", response.status, response.statusText);
-          } else {
-            const data = await response.json();
-            isMedia = true;
-            console.log("Video generation server responded:", data);
-            functionResponsePart = {
-              name: functionCall.name,
-              response: {
-                result: "video generation has been generated",
-              },
-            };
-            isGeneratingMedia = true;
-          }
-        } catch (err) {
-          functionResponsePart = {
-            name: functionCall.name,
-            response: {
-              result: `video generation failed. [ERROR]:${err}`,
-            },
-          };
-          console.error("Failed to send function call to video gen server:", err);
-      }
-     
-      }
-      chatObj.history.push({
-        role: "model",
-        parts: [
-          {
-            functionCall: functionCall,
-          },
-        ],
-      });
-      chatObj.history.push({
-        role: "system",
-        parts: [
-          {
-            functionResponse: functionResponsePart,
-          },
-        ],
-      });
-
-      let aiFunctionCallRef = await db.collection('Message').add({
-        chatID: chatRef,
-        content: JSON.stringify(functionCall),
-        references: [],
-        attachments: [],
-        role: 'model',
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
-      });
-      let functionResponse = await db.collection('Message').add({
-        chatID: chatRef,
-        content: JSON.stringify(functionResponsePart),
-        references: [],
-        attachments: [],
-        role: 'system',
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
-      });
-
-      let messagefunc = [
-        agentResponse.candidates[0].content,
-        {
-          role: "system",
-          parts: [
-            {
-              functionResponse: functionResponsePart,
-            },
-          ],
-        },
-      ];
-      message.push(...messagefunc);
-    } else {
-      console.log(`Agent prompt token count:${agentResponse.usageMetadata.promptTokenCount}`)
-      chatObj.history.push({ role: "model", parts: [{ text: agentResponse.text }] });
-      break;
-    }
-  }
-
-  aiMessageRef.set({
-    chatID: chatRef,
-    content: JSON.stringify([{ text: agentResponse.text }]),
-    references: [],
-    attachments: [],
-    role: 'model',
-    timestamp: admin.firestore.FieldValue.serverTimestamp()
-  });
-  return { message: !isGeneratingMedia?agentResponse.text:'Your video is being created, horera hanini', media: isMedia };
+  return agentResponse;
 }
 
 
@@ -522,3 +376,123 @@ RULES:
     return null;
   }
 };
+
+/**
+ * {
+ * userId:userObj
+ * }
+ * 
+ * userObj:{
+ * 
+ * }
+ */
+
+export async function agentLoop(userId, chatObj, chatRef, message=[]){
+  /**
+   * This function should handle running the agent, Takes the chat history and runs inference
+   */
+  var userObj = userMap.get(userId);
+  if(!userObj){
+    console.log(`UserObj:${userObj}`);
+  }
+  var plan = userObj.plan;
+  var modelLimits = getModelConfig(plan);
+  let prompt = agentPrompt();
+  let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length), chatObj.chunks);
+  var agentResponse;
+  var isMedia = false;
+  var aiMessageRef;
+  while (true){
+    agentResponse = await ai.models.generateContent({
+      model: modelLimits.agentModel,
+      contents: completeMessage.concat(message),
+      config: {
+        thinkingConfig: {
+          thinkingBudget: modelLimits.thinkingBudget
+        },
+        systemInstruction: prompt,
+        tools: [
+          {
+            functionDeclarations: [videoGenFunctionDeclaration]
+          }
+        ]
+      }
+    }); 
+    if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
+      const functionCall = agentResponse.functionCalls[0];
+      var functionResponsePart;
+      if(functionCall.name=='video_gen'){
+        try {
+          let data = {args:functionCall.args, uid:userId,  chatId:chatRef.id}
+          const response = await handleSendToVideoGen(data);  
+          if (!response.ok) {
+            functionResponsePart = {
+              name: functionCall.name,
+              response: {
+                result: "video generation failed, internal server error",
+              },
+            };
+            console.error("Error sending function call to video gen server:", response.status, response.statusText);
+          } else {
+            const data = await response.json();
+            isMedia = true;
+            console.log("Video generation server responded:", data);
+          }
+        } catch (err) {
+          functionResponsePart = {
+            name: functionCall.name,
+            response: {
+              result: `video generation failed. [ERROR]:${err}`,
+            },
+          };
+          console.error("Failed to send function call to video gen server:", err);
+        }
+     
+      }
+      chatObj.history.push({
+        role: "model",
+        parts: [
+          {
+            functionCall: functionCall,
+          },
+        ],
+      });
+      await createMessageQuery({content:functionCall, role:'model', chatRef})
+      let messagefunc = [
+        agentResponse.candidates[0].content
+      ]
+      if(functionResponsePart){
+        chatObj.history.push({
+          role: "system",
+          parts: [
+            {
+              functionResponse: functionResponsePart,
+            },
+          ],
+        });
+        messagefunc.push({
+          role: "system",
+          parts: [
+            {
+              functionResponse: functionResponsePart,
+            },
+          ],
+        },)
+        let functionResponse = await createMessageQuery({content:functionResponsePart, role:'model', chatRef})
+      }else{
+        console.log('video gen is generating...');
+        break;
+      }
+     
+      message.push(...messagefunc);
+
+
+    }else{
+      chatObj.history.push({ role: "model", parts: [{ text: agentResponse.text }] });
+      aiMessageRef = await createMessageQuery({content:[{text:agentResponse.text}], role:'model', chatRef})
+      break;
+    }
+  }
+  return { message: !isMedia?agentResponse.text:'Your video is being created, ready in a bit', media: isMedia, messageRef:aiMessageRef};
+
+}

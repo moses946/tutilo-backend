@@ -290,3 +290,12 @@ export const handleBulkDeleteChat = async (notebookId, chatIds)=>{
         console.log(`[ERROR]:Bulk delete chat:${err}`);
     }
 }
+
+export const handleSendToVideoGen = async (data)=>{
+    const response = await fetch('http://172.30.182.137:8000/render', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...data.args, userID: data.uid, chatID: data.chatId })
+      });
+    return response
+}

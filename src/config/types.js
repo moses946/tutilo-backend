@@ -1,3 +1,4 @@
+import {Type } from "@google/genai";
 export const chatNamingPrompt = (chatObj)=>{
   let chatObjCopy = {...chatObj};
   let template = `
@@ -400,3 +401,22 @@ export const promptPrefix = (history, chunks)=>{
   }]}]
   return prefix
 }
+
+export const videoGenFunctionDeclaration = {
+  name: 'video_gen',
+  description: 'Generates a video for math concept explanations',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      className: {
+        type: Type.STRING,
+        description: 'The name of the class to be passed to manim command to render the scene'
+      },
+      code: {
+        type: Type.STRING,
+        description: 'The manim code written in python, properly formatted obeying Python syntax'
+      },
+    },
+    required: ['className', 'code']
+  }
+};

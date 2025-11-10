@@ -1,6 +1,8 @@
 import { createUserQuery } from "../models/query.js";
 import admin, { db, verifyToken } from "../services/firebase.js"
 
+
+
 export async function handleOnboarding(req, res){
     // do some sanitization...
     try{

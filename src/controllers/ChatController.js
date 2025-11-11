@@ -155,7 +155,7 @@ export async function handleCreateMessage(req, res){
         obj.history.push(message);
         // run the AI agent to get the response
         result = await handleRunAgent(req, data, obj, chatRef);
-        console.log('After agent: ', result.message)
+        // console.log('After agent: ', result.message)
         // the agent returns a JSON with {message:string}
         // createMessageQuery({chatRef, message:result.message, role:'model'})
     }catch(err){

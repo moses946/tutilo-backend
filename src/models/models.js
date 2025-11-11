@@ -218,7 +218,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
   var aiMessageRef = db.collection('Message').doc();
 
   if (!intentResult.isInDomain && intentResult.messageIfOutOfDomain) {
-    console.log(`Message out of domain:${intentResult.messageIfOutOfDomain}`);
     chatObj.history.push({
       role: "model",
       parts: [
@@ -240,12 +239,11 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
   }
 
   if (intentResult.retrievalNeeded) {
-    console.log(`Inside retrieval:${intentResult.ragQuery}`)
     const embeddingStartTime = performance.now();
     let embedding = await ai.models.embedContent({
       model: 'gemini-embedding-exp-03-07',
       contents: [intentResult.ragQuery],
-      taskType: 'RETRIEVAL_QUERY',
+      taskType: 'QUESTION_ANSWERING',
       config: { outputDimensionality: modelLimits.vectorDim },
     });
     const embeddingEndTime = performance.now();
@@ -256,7 +254,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
     let qdrantResults = await qdrantClient.search(data.notebookID, {
       vector: queryVector,
       limit: 5,
-      with_payload: true
+      with_payload: true,
     });
     let queryEndTime = performance.now();
     console.log(`vector retrieval time:${queryEndTime-queryStartTime}ms`);
@@ -383,7 +381,7 @@ RULES:
  * }
  * 
  * userObj:{
- * 
+ *  plan:string
  * }
  */
 
@@ -398,7 +396,8 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
   var plan = userObj.plan;
   var modelLimits = getModelConfig(plan);
   let prompt = agentPrompt();
-  let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length), chatObj.chunks);
+  console.log(`History:${JSON.stringify(chatObj.history)}`)
+  let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length-1), chatObj.chunks);
   var agentResponse;
   var isMedia = false;
   var aiMessageRef;
@@ -423,6 +422,33 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
       var functionResponsePart;
       if(functionCall.name=='video_gen'){
         try {
+          if(plan=='free'){
+            functionResponsePart = {
+              name: functionCall.name,
+              response: {
+                result: "video generation failed, free tier cannot generate videos",
+              },
+            };
+            chatObj.history.push({
+              role: "system",
+              parts: [
+                {
+                  functionResponse: functionResponsePart,
+                },
+              ],
+            });
+            message.push({
+              role: "system",
+              parts: [
+                {
+                  functionResponse: functionResponsePart,
+                },
+              ],
+            },)
+           await createMessageQuery({content:functionResponsePart, role:'system', chatRef})
+           continue
+
+          }
           let data = {args:functionCall.args, uid:userId,  chatId:chatRef.id}
           const response = await handleSendToVideoGen(data);  
           if (!response.ok) {
@@ -478,7 +504,7 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
             },
           ],
         },)
-        let functionResponse = await createMessageQuery({content:functionResponsePart, role:'model', chatRef})
+       await createMessageQuery({content:functionResponsePart, role:'system', chatRef})
       }else{
         console.log('video gen is generating...');
         break;

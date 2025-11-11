@@ -13,7 +13,7 @@ export async function videoReadyWebhook(req, res) {
     var chatRef = db.collection('Chat').doc(chatId);
     // create the function response part 
     var functionResponsePart;
-    if(errorLog && !(status=='completed')){
+    if(errorLog){
         functionResponsePart = {
             name: 'video_gen',
             response: {
@@ -21,6 +21,7 @@ export async function videoReadyWebhook(req, res) {
             }
         };
     }else{
+        console.log(`video gen status:${status}`);
         functionResponsePart = {
             name:'video_gen',
             response:{
@@ -36,6 +37,8 @@ export async function videoReadyWebhook(req, res) {
               },
         ]
     }
+    await createMessageQuery({chatRef, content:functionResponsePart, role:'system'})
+    chatObj.history.push(functionResponse)
     var response = await agentLoop(userID, chatObj, chatRef, [functionResponse])
     try{
         console.log(`Here is the socket:${client_sockets} -- message id:${chatId}`)
@@ -57,8 +60,8 @@ export async function videoReadyWebhook(req, res) {
         if(client_sockets){           
             await response.messageRef.update({attachments:[{status:500, url:null}]});
             let chatObj = chatMap.get(chatRef.id);
-            chatObj.history.push({role:'system', parts:[{text:'Video generation has failed'}]});
-            let data = {chatRef:chatRef,role:'system', content:[{text:'Video generation has failed'}]};
+            chatObj.history.push({role:'system', parts:[{text:response.message || 'Video gen has failed'}]});
+            let data = {chatRef:chatRef,role:'system', content:[{text:response.message || 'Video gen has failed'}]};
             await createMessageQuery(data)
 
             for(const socket of client_sockets){

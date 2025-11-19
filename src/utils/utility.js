@@ -135,7 +135,7 @@ export const handleEmbedding = async (pages)=>{
   Input: chunks: Array of chunk objects with text content, chunkRefs: Array of chunk document references
   Output: Array of Qdrant point IDs
 */
-export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collectionName = 'notebook_chunks') => {
+export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collectionName = 'notebook_chunks', vectorDim=256) => {
     try {
         console.log(`Creating embeddings for ${chunks.length} chunks...`);
         
@@ -151,7 +151,7 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
                 model: 'gemini-embedding-exp-03-07',
                 contents: batchTexts,
                 taskType: 'RETRIEVAL_DOCUMENT',
-                config: { outputDimensionality: 256 },
+                config: { outputDimensionality: vectorDim },
             });
             if (response && response.embeddings) {
                 allEmbeddings = allEmbeddings.concat(response.embeddings);
@@ -176,13 +176,22 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
         
         // Ensure collection exists
         try {
-            await qdrantClient.getCollection(collectionName);
+            let collection = await qdrantClient.getCollection(collectionName);
+            if(!collection){
+                console.log(`Creating collection, there was none: ${collectionName}`);
+                await qdrantClient.createCollection(collectionName, {
+                    vectors: {
+                        size: vectorDim,
+                        distance: 'Cosine'
+                    }
+                });
+            }
         } catch (error) {
             if (error.status === 404) {
                 console.log(`Creating collection: ${collectionName}`);
                 await qdrantClient.createCollection(collectionName, {
                     vectors: {
-                        size: 256,
+                        size: vectorDim,
                         distance: 'Cosine'
                     }
                 });

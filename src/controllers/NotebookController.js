@@ -203,18 +203,31 @@ async function processMaterial(file, materialRef, notebookRef, vectorDim) {
 export async function handleNotebookDeletion(req, res){
     const {id} = req.params;
     try{
-        await deleteNotebookQuery(id);
-        await bucket.deleteFiles({prefix:`notebooks/${id}/`});
-        await bucket.deleteFiles({prefix:`videos/${id}/`})
-        // delete the qdrant collection
-        await qdrantClient.deleteCollection(id);
-        //await bucket.deleteFiles({ prefix: `notebooks/${id}/` });
+        // get the notebook reference and update the isDeleted to true then cron job will do the deletion
+        let noteookRef = db.collection('Notebook').doc(id)
+        await noteookRef.update({isDeleted:true});
         res.status(200).json({message: 'Notebook deleted successfully'});
     }catch(err){
         console.error('Notebook deletion failed:', err);
         res.status(500).json({error: 'Notebook deletion failed'});
     }
 }
+
+// export async function handleNotebookDeletion(req, res){
+//     const {id} = req.params;
+//     try{
+//         await deleteNotebookQuery(id);
+//         await bucket.deleteFiles({prefix:`notebooks/${id}/`});
+//         await bucket.deleteFiles({prefix:`videos/${id}/`})
+//         // delete the qdrant collection
+//         await qdrantClient.deleteCollection(id);
+//         //await bucket.deleteFiles({ prefix: `notebooks/${id}/` });
+//         res.status(200).json({message: 'Notebook deleted successfully'});
+//     }catch(err){
+//         console.error('Notebook deletion failed:', err);
+//         res.status(500).json({error: 'Notebook deletion failed'});
+//     }
+// }
 
 export async function handleNotebookUpdate(req, res) {
     try {

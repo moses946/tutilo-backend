@@ -26,6 +26,7 @@ export const createNotebookQuery = async (notebook) => {
         userID: userRef,
         dateCreated: now,
         dateUpdated: now,
+        isDeleted:false,
         materialRefs: [], // Will be populated with material references
         status: 'processing',
         links: Array.isArray(notebook.links) ? notebook.links : [],
@@ -126,7 +127,7 @@ read queries
 export const readNotebooksQuery = async (userID) =>{
     let userRef = db.collection('User').doc(userID);
     // Fetch all notebooks where the userID field matches the given userID
-    let notebookRefs = await db.collection('Notebook').where('userID', '==', userRef).get();
+    let notebookRefs = await db.collection('Notebook').where('userID', '==', userRef).where('isDeleted', '==',false).get();
     const notebooks = [];
     notebookRefs.forEach(doc => {
         const data = doc.data();
@@ -326,7 +327,7 @@ export const deleteNotebookQuery = async (notebookId) => {
 export const deleteChatQuery = async (chatId)=>{
     const chatRef = db.collection('Chat').doc(chatId);
     // get the messages
-    let messagesSnaps  = await db.collection('Chat').where('chatID', '==', chatId).get();
+    let messagesSnaps  = await db.collection('Message').where('chatID', '==', chatRef).get();
     let messagesRefs = messagesSnaps.docs.map(doc=>doc.ref)
     const docsToDelete = [...messagesRefs];
     const BATCH_SIZE = 500;
@@ -353,6 +354,7 @@ export const deleteChatQuery = async (chatId)=>{
   
     // Finally, delete the chat itself
     await chatRef.delete();
+    console.log('chat and messages deleted')
 }
 /*
 This function creates a single flashcard document in Firestore containing all flashcards for a notebook
@@ -388,12 +390,13 @@ export const updateNotebookWithFlashcards = async (notebookRef, flashcardRef) =>
 export const createMessageQuery = async (data)=>{
     let aiMessageRef = await db.collection('Message').add({
         chatID:data.chatRef,
-        content:JSON.stringify([{text:data.message}]),
-        references:[],
-        attachments:[],
+        content:JSON.stringify(data.content),
+        references:data.references || [],
+        attachments:data.attachments || [],
         role:data.role,
         timestamp:admin.firestore.FieldValue.serverTimestamp()
     })
+    return aiMessageRef
 }
 
 // User collection related routes

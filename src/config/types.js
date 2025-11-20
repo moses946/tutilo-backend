@@ -1,3 +1,4 @@
+import {Type } from "@google/genai";
 export const chatNamingPrompt = (chatObj)=>{
   let chatObjCopy = {...chatObj};
   let template = `
@@ -168,9 +169,7 @@ Output:
 }
 `
 
-export const intentPrompt = (chatObj, summary) => {
-  const chatHistory = chatObj.history.slice(0, -1); // All but the last message
-  const retrievedChunks = chatObj.chunks || [];
+export const intentPrompt = (summary) => {
 
   return `
 # ROLE: You are a hyper-efficient Intent Detection Engine. Your job is to analyze the user's latest prompt within the conversational context and determine the next processing step.
@@ -181,14 +180,6 @@ export const intentPrompt = (chatObj, summary) => {
 <NOTEBOOK_SUMMARY>
 ${summary}
 </NOTEBOOK_SUMMARY>
-
-<CONVERSATION_HISTORY>
-${JSON.stringify(chatHistory)}
-</CONVERSATION_HISTORY>
-
-<CURRENTLY_RETRIEVED_CHUNKS>
-${JSON.stringify(retrievedChunks)}
-</CURRENTLY_RETRIEVED_CHUNKS>
 
 <AVAILABLE_TOOLS>
 [
@@ -236,11 +227,7 @@ Your entire output MUST be a single, raw JSON object with the following structur
 `;
 };
 
-export const agentPrompt = (chatObj) => {
-  // Assuming the full history including the user's latest prompt is passed.
-  const fullHistory = chatObj.history;
-  const retrievedChunks = chatObj.chunks || [];
-  
+export const agentPrompt = () => {
   return `
 # ROLE & PERSONA: You are Tutilo, an expert AI Study Companion.
 - Your personality is helpful, encouraging, and precise.
@@ -254,15 +241,6 @@ export const agentPrompt = (chatObj) => {
 # PRIMARY_TASK:
 Based on the user's request and the provided context, you must either provide a direct, text-based answer OR call a tool. Your response must be one of these two formats, never both.
 After a tool call, give a text response synthesizing the results
-# CONTEXT:
-<CONVERSATION_HISTORY>
-${JSON.stringify(fullHistory)}
-</CONVERSATION_HISTORY>
-
-<CURRENTLY_RETRIEVED_CHUNKS>
-${JSON.stringify(retrievedChunks)}
-</CURRENTLY_RETRIEVED_CHUNKS>
-
 ---
 # RESPONSE_DIRECTIVES
 
@@ -405,3 +383,40 @@ Response Example:
 `
   return prompt
 }
+
+export const promptPrefix = (history, chunks)=>{
+  let prefix = [{
+    role:'user',
+    parts:[{
+      text:`
+        # CONTEXT:
+          <CONVERSATION_HISTORY>
+          ${JSON.stringify(history)}
+          </CONVERSATION_HISTORY>
+
+          <CURRENTLY_RETRIEVED_CHUNKS>
+          ${JSON.stringify(chunks || [])}
+          </CURRENTLY_RETRIEVED_CHUNKS>
+        `
+  }]}]
+  return prefix
+}
+
+export const videoGenFunctionDeclaration = {
+  name: 'video_gen',
+  description: 'Generates a video for math concept explanations',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      className: {
+        type: Type.STRING,
+        description: 'The name of the class to be passed to manim command to render the scene'
+      },
+      code: {
+        type: Type.STRING,
+        description: 'The manim code written in python, properly formatted obeying Python syntax'
+      },
+    },
+    required: ['className', 'code']
+  }
+};

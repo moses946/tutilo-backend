@@ -3,7 +3,7 @@ import {bucket, db} from '../services/firebase.js';
 import {ai} from '../models/models.js'
 import qdrantClient from '../services/qdrant.js'
 import {v4} from 'uuid'
-import { updateNotebookWithNewMaterialQuery } from '../models/query.js';
+import { deleteChatQuery, deleteNotebookQuery, updateNotebookWithNewMaterialQuery } from '../models/query.js';
 // multer storage
 const storage = multer.memoryStorage();
 export const upload = multer({ storage });
@@ -18,7 +18,8 @@ export const handleFileUpload = async (file, path)=>{
             },
             resumable: false,
         });
-        return { path: destinationPath, name: file.originalname, size: file.size, mimetype:file.mimetype};
+        await blob.makePublic()
+        return { mediaUrl: blob.publicUrl(), name: file.originalname, size: file.size, type:file.mimetype};
     }catch(err){
         console.log(`Error in handleFileUpload func:${err}`);
         throw err;
@@ -229,4 +230,72 @@ export const handleNotebookUpdate = async(notebookID, materialRefs)=>{
   
     await updateNotebookWithNewMaterialQuery(notebookRef, materialRefs);
     console.log('Notebook updated with new material references');
+}
+
+export const handleNotebookDeletion = async (notebookId)=>{
+    try{
+
+        // get the chats and bulk delete
+        let chatSnaps = await db.collection('Chat').where('notebookID', '==', notebookId).get();
+        let chatIds = chatSnaps.docs.map((doc)=>doc.id);
+        await handleBulkDeleteChat(notebookId, chatIds);
+        await bucket.deleteFiles({prefix:`notebooks/${notebookId}/`});
+        await bucket.deleteFiles({prefix:`videos/${notebookId}/`})
+        // delete the qdrant collection
+        await qdrantClient.deleteCollection(notebookId);
+        await deleteNotebookQuery(notebookId);
+        console.log(`Notebook Deletion was a success:${notebookId}`);
+    }catch(err){
+        // switch it back to isDeleted false
+        console.error('Notebook deletion failed:', err);
+    }
+}
+
+export const handleBulkNotebookDeletion = async (notebookIDs) =>{
+    try{
+        await Promise.all(notebookIDs.map((id)=>handleNotebookDeletion(id)));
+        console.log(`Bulk deletions have worked`)
+    }catch (err){
+        console.log(`Error in bulk deletions`);
+    }
+}
+
+export const handleSearchForDeletedNotebooks = async ()=>{
+    /**
+     * This function is to be used by the cron job to scan for deleted notebooks and pass the ids to the bulk deletion helper function
+     */
+    let notebookSnaps = await db.collection('Notebook').where('isDeleted', '==', true).get()
+    let notebookIds = notebookSnaps.docs.map((doc)=>doc.id);
+    return notebookIds
+
+}
+
+export const handleDeleteChat = async (notebookId, chatId)=>{
+     // delete chat related stuff on db
+     console.log(`Deleting chat query`);
+     await deleteChatQuery(chatId);
+     console.log(`Deleted chat query`);
+     await bucket.deleteFiles({prefix:`notebooks/${notebookId}/chats/${chatId}/`})
+     console.log(`Deleted bucket files`);
+}
+
+export const handleBulkDeleteChat = async (notebookId, chatIds)=>{
+    try{
+        await Promise.all(
+            chatIds.map(async (chatId)=>{
+                await handleDeleteChat(notebookId, chatId)
+            })
+        )
+    }catch(err){
+        console.log(`[ERROR]:Bulk delete chat:${err}`);
+    }
+}
+
+export const handleSendToVideoGen = async (data)=>{
+    const response = await fetch('http://172.30.182.137:8000/render', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...data.args, userID: data.uid, chatID: data.chatId })
+      });
+    return response
 }

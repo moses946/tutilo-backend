@@ -16,7 +16,7 @@ import { handleBulkFileUpload } from "../utils/utility.js";
     chunkID:concept
  }
 */
-var chatMap = new Map();
+export var chatMap = new Map();
 
 export async function handleCreateChat(req, res){
     try {
@@ -81,8 +81,10 @@ export async function handleDeleteChat(req, res){
             return res.status(400).json({message:'womp womp'})
         }
         // delete chat related stuff on db
+        console.log(`Deleting chat query`);
         await deleteChatQuery(chatID);
         await bucket.deleteFiles({prefix:`notebooks/${notebookID}/chats/${chatID}/`})
+        console.log(`Deleting bucket files`);
         res.status(200).json({message: 'Chat deleted successfully'});
     }catch(err){
         console.log(`[ERROR]:${err}`);
@@ -135,7 +137,7 @@ export async function handleCreateMessage(req, res){
             files = await handleBulkFileUpload(files, attachmentBasePath);
         }
         // create a message ref and add attachements
-        createMessageQuery({chatRef, message:data.text, role:'user', attachments:files})
+        createMessageQuery({chatRef, content:[{text:data.text}], role:'user', attachments:files})
         // store the history text only, Will build the attachments for Gemini from the files field in the request
         let message = {role:'user', parts:[{text:data.text}]};
         // adding the message to history, because even if the AI generation fails the message will still be seen in history
@@ -153,6 +155,7 @@ export async function handleCreateMessage(req, res){
         obj.history.push(message);
         // run the AI agent to get the response
         result = await handleRunAgent(req, data, obj, chatRef);
+        // console.log('After agent: ', result.message)
         // the agent returns a JSON with {message:string}
         // createMessageQuery({chatRef, message:result.message, role:'model'})
     }catch(err){

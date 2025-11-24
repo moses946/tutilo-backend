@@ -10,7 +10,6 @@ export async function handleNotebookCreation(req, res){
     const { uid, subscription } = req.user;
     const limits = planLimits[subscription];
      // get the plan limits
-     console.log(`This is the plan ${subscription}`)
      let modelLimits = getModelConfig(subscription)
      let vectorDim = modelLimits.vectorDim;
 
@@ -32,29 +31,19 @@ export async function handleNotebookCreation(req, res){
             console.error('Failed to query notebook count:', dbError);
             return res.status(500).json({ error: 'Failed to verify user notebook count.' });
         }
-    }
-
-    // Make sure there is an auth middleware that protects this route
-    console.log(`Received these files:${req.files}--${req.files[0].originalname}`);
-        
+    }        
     let data = req.body;
     const files = req.files;
     
     try {
         // Step 1: Create a new notebook reference in Firestore
-        let notebookRef = await createNotebookQuery(data);
-        console.log('Notebook created with ID:', notebookRef.id);
-        
+        let notebookRef = await createNotebookQuery(data);        
         // Step 2: Upload original files to storage
         const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
-        const uploaded = await handleBulkFileUpload(files, noteBookBasePath);
-        console.log('Files uploaded to storage');
-        
+        const uploaded = await handleBulkFileUpload(files, noteBookBasePath);        
         // Step 3: Create material documents in Firestore and get references
         const materialRefs = await createMaterialQuery(notebookRef, files);
-        console.log('Material documents created');
-        
-        // Step 4: Process each file into chunks and create chunk documents
+       // Step 4: Process each file into chunks and create chunk documents
         const materialChunkMappings = [];
         let chunkRefsCombined = [];
         let chunksCombined = [];
@@ -62,37 +51,26 @@ export async function handleNotebookCreation(req, res){
             const file = files[i];
             const materialRef = materialRefs[i];
             // Extract chunks from the file
-            const chunks = await extractPdfText(file.buffer);
-            console.log(`Extracted ${chunks.length} chunks from ${file.originalname || file.name}`);
-            
+            const chunks = await extractPdfText(file.buffer);            
             // Create chunk documents in Firestore
             const chunkRefs = await createChunksQuery(chunks, materialRef);
             chunkRefsCombined.push(...chunkRefs)
             chunksCombined.push(...chunks)
-            console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.name}`);
             const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
             const chunkItems = chunks.map((chunk, index)=>{
                 const chunkRef = chunkRefs[index];
                 const chunkPath = chunkRef.id;
                 return {...chunk, name: chunkPath};
             })
-            await handleBulkChunkUpload(chunkItems, chunkBasePath);
-
-           
+            await handleBulkChunkUpload(chunkItems, chunkBasePath);        
 
             // Step 5: Create embeddings and store in Qdrant
-            const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookRef.id, vectorDim);
-            console.log(`Created embeddings and stored ${qdrantPointIds.length} points in Qdrant`);
-            
+            const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookRef.id, vectorDim);           
             
             // Step 6: Update chunk documents with Qdrant point IDs
-            await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
-            console.log(`Updated chunk documents with Qdrant point IDs`);
-            
+            await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);            
             // Update material with chunk references
-            await updateMaterialWithChunks(materialRef, chunkRefs);
-            console.log(`Updated material ${materialRef.id} with chunk references`);
-            
+            await updateMaterialWithChunks(materialRef, chunkRefs);            
             materialChunkMappings.push({
                 materialId: materialRef.id,
                 materialName: file.originalname || file.name,
@@ -103,7 +81,6 @@ export async function handleNotebookCreation(req, res){
         }
         // Step 7: Update notebook with material references
         await updateNotebookWithMaterials(notebookRef, materialRefs);
-        console.log('Updated notebook with material references');
         let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
 
         result = JSON.parse(result)
@@ -116,7 +93,6 @@ export async function handleNotebookCreation(req, res){
 
         if (flashcardRef) {
             await updateNotebookWithFlashcards(notebookRef, flashcardRef);
-            console.log('Updated notebook with flashcard reference');
         }
         
         res.status(201).json({
@@ -162,12 +138,8 @@ export async function handleNotebookCreation(req, res){
 async function processMaterial(file, materialRef, notebookRef, vectorDim) {
     // Extract chunks from the file
     const chunks = await extractPdfText(file.buffer);
-    console.log(`Extracted ${chunks.length} chunks from ${file.originalname}`);
-
     // Create chunk documents in Firestore
     const chunkRefs = await createChunksQuery(chunks, materialRef);
-    console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.id}`);
-
     // Create embeddings and store in Qdrant (can run in parallel with chunk upload)
     const [qdrantPointIds, ] = await Promise.all([
         handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookRef.id, vectorDim),
@@ -180,15 +152,11 @@ async function processMaterial(file, materialRef, notebookRef, vectorDim) {
             await handleBulkChunkUpload(chunkItems, chunkBasePath);
         })(),
     ]);
-    console.log(`Stored ${qdrantPointIds.length} points in Qdrant`);
-
     // Update chunk documents with Qdrant IDs and update the material with chunk references
     await Promise.all([
         updateChunksWithQdrantIds(chunkRefs, qdrantPointIds),
         updateMaterialWithChunks(materialRef, chunkRefs),
     ]);
-    console.log(`Updated chunk documents and material ${materialRef.id}`);
-
     // Return the mapping for the final response
     return {
         materialId: materialRef.id,
@@ -241,24 +209,18 @@ export async function handleNotebookUpdate(req, res) {
         if (deletedMaterialIdsJson) {
             const deletedMaterialIds = JSON.parse(deletedMaterialIdsJson);
             if (Array.isArray(deletedMaterialIds) && deletedMaterialIds.length > 0) {
-                console.log(`Deleting ${deletedMaterialIds.length} materials from notebook ${notebookId}`);
                 const deletePromises = deletedMaterialIds.map(materialId => 
                     removeMaterialFromNotebook(notebookRef, materialId)
                 );
                 await Promise.all(deletePromises);
-                console.log('Finished deleting materials.');
             }
         }
 
         // Handle new file additions
         if (files.length > 0) {
-            console.log(`Adding ${files.length} new files to notebook ${notebookId}`);
             const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
             await handleBulkFileUpload(files, noteBookBasePath);
-
             const materialRefs = await createMaterialQuery(notebookRef, files);
-            console.log('New material documents created');
-
             let newChunkRefsCombined = [];
             let newChunksCombined = [];
             
@@ -268,45 +230,17 @@ export async function handleNotebookUpdate(req, res) {
                 
                 const chunks = await extractPdfText(file.buffer);
                 newChunksCombined.push(...chunks);
-                console.log(`Extracted ${chunks.length} chunks from ${file.originalname || file.name}`);
                 
                 const chunkRefs = await createChunksQuery(chunks, materialRef);
                 newChunkRefsCombined.push(...chunkRefs);
-                console.log(`Created ${chunkRefs.length} chunk documents for material ${materialRef.id}`);
 
                 const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookId);
-                console.log(`Created embeddings and stored ${qdrantPointIds.length} points in Qdrant`);
                 
                 await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
                 await updateMaterialWithChunks(materialRef, chunkRefs);
             }
             
-            await updateNotebookWithMaterials(notebookRef, materialRefs);
-            console.log('Updated notebook with new material references');
-
-            {/* Handle generating a new concept map and new flashcards once new material is added to the notebook */}
-
-            // let result = await handleConceptMapGeneration(newChunkRefsCombined, newChunksCombined);
-
-            // result = JSON.parse(result)
-            // let concepts = result.concept_map
-            // let chunkConceptMap = {}
-            // concepts.map((concept)=>(
-            //     concept.chunkIds.map((chunkId)=>{
-            //         chunkConceptMap[chunkId]=concept.concept
-            //     })
-            // ))
-            // await notebookRef.update({summary:result.summary})
-            // await createConceptMapQuery(chunkConceptMap, result, notebookRef)
-        
-
-
-            // const flashcardRef = await handleFlashcardGeneration(newChunkRefsCombined, newChunksCombined, notebookRef);
-            // if (flashcardRef) {
-            //     await updateNotebookWithFlashcards(notebookRef, flashcardRef);
-            //     console.log('Updated notebook with flashcard reference');
-            // }
-            
+            await updateNotebookWithMaterials(notebookRef, materialRefs);            
         }
 
         // Handle new links and texts
@@ -328,8 +262,6 @@ export async function handleNotebookUpdate(req, res) {
                 texts: mergedTexts,
             });
         }
-
-        console.log(`Notebook ${notebookId} updated successfully.`);
         res.status(200).json({
             message: 'Notebook updated successfully',
             notebookId: notebookId,
@@ -345,7 +277,6 @@ export async function handleNotebookUpdate(req, res) {
 }
 
 export async function handleConceptMapRetrieval(req, res){
-    console.log('Retrieval of concept map')
     try {
         const notebookId = req.params.id;
         if (!notebookId) {
@@ -692,9 +623,6 @@ export async function handleConceptChatCreate(req, res) {
                 await handleQuizGeneration(chatRef.id, conceptContext.chunks);
             }
         }
-
-        console.log('Concept chat reference materials:', referenceMaterialsPayload);
-
         res.json({
             chatId: chatRef.id,
             conceptId,
@@ -977,7 +905,6 @@ export async function handleNotebookRead (req, res){
         let result = await readNotebooksQuery(userID);
         res.json(result);
     }catch(err){
-        console.log(`Error while fetching notebooks:${err}`);
         res.status(500).json({
             error: 'Failed to fetch notebooks',
             details: err.message

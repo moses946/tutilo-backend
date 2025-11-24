@@ -9,7 +9,6 @@ export const authMiddleWare = async(req, res, next)=>{
             res.status(401).json({error:'Invalid Authorization'});
         }
         const token = parts[1];
-        // console.log(`Token:${token}`)
         let idToken = await verifyToken(token);
         if(!idToken){
             res.status(401).json({message:'unauthorized'});
@@ -21,8 +20,6 @@ export const authMiddleWare = async(req, res, next)=>{
         let userDoc = await db.collection('User').doc(idToken.uid).get();
         let userRef = userDoc.data();
         let plan = userRef && userRef.subscription ? userRef.subscription : 'free';
-        console.log(`This is the plan:${plan}`)
-        // console.log('Authotizationmiddleware--Plan: ',plan )
         req.user = {
             uid:idToken.uid,
             email:idToken.email,
@@ -30,10 +27,8 @@ export const authMiddleWare = async(req, res, next)=>{
         };
         let userObj = userMap.get(idToken.uid);
         if(!userObj){
-            console.log(`Setting user obj`)
             userMap.set(idToken.uid, {plan})
         }
-        console.log(`Got the user obj:${JSON.stringify(userObj)}`);
     }catch(err){
         console.log('Error while verifying token', err);
         res.sendStatus(500)

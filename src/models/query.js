@@ -53,7 +53,6 @@ export const createMaterialQuery = async (notebookRef, materials) => {
             chunkRefs: [] // Will be populated with chunk references
         });
         materialRefs.push(materialRef);
-        console.log('Material added successfully');
     } else {
         const batch = db.batch();
         materials.forEach((material) => {
@@ -70,7 +69,6 @@ export const createMaterialQuery = async (notebookRef, materials) => {
             materialRefs.push(materialRef);
         });
         await batch.commit();
-        console.log('Batch documents uploaded successfully');
     }
     
     return materialRefs;
@@ -114,7 +112,6 @@ export const createChunksQuery = async (chunks, materialRef) => {
 }
 
 export const createConceptMapQuery = async (result, notebookRef) => {
-    console.log("Inside concept map query");
     const conceptMapRef = await db.collection('ConceptMap').add({
         notebookID:notebookRef,
         graphData:{layout:result, progress:{}},
@@ -221,7 +218,6 @@ export const updateChunksWithQdrantIds = async (chunkRefs, qdrantPointIds) => {
     });
     
     await batch.commit();
-    console.log(`Updated ${chunkRefs.length} chunks with Qdrant point IDs`);
 }
 
 /*
@@ -315,13 +311,11 @@ export const deleteNotebookQuery = async (notebookId) => {
     
     // Commit any remaining batches
     if (batchPromises.length > 0) {
-        console.log(`These are the batch promises:${batchPromises}`);
       await Promise.all(batchPromises);
     }
 
     // Finally, delete the notebook itself
     await notebookRef.delete();
-    console.log(`Notebook with ID:${notebookId} has been deleted`);
 };
 
 export const deleteChatQuery = async (chatId)=>{
@@ -348,13 +342,11 @@ export const deleteChatQuery = async (chatId)=>{
     
     // Commit any remaining batches
     if (batchPromises.length > 0) {
-        console.log(`These are the batch promises:${batchPromises.length}`);
       await Promise.all(batchPromises);
     }
   
     // Finally, delete the chat itself
     await chatRef.delete();
-    console.log('chat and messages deleted')
 }
 /*
 This function creates a single flashcard document in Firestore containing all flashcards for a notebook
@@ -418,7 +410,6 @@ export const createUserQuery = async (data)=>{
             subscription:'free',
             isOnboardingComplete:false
         })
-        console.log(`User created with ID: ${userRef.id}`);
     } else {
         // Update lastLogin for existing user
         await userRef.update({
@@ -428,7 +419,6 @@ export const createUserQuery = async (data)=>{
             lastName: data.lastName || userDoc.data().lastName,
             isOnboardingComplete:true
         });
-        console.log(`User updated with ID: ${userRef.id}`);
     }
     
     // Check if UserProfile already exists for this user
@@ -456,9 +446,7 @@ export const createUserQuery = async (data)=>{
             },
             userId: userRef // Reference to the User document
         })
-        
-        console.log(`UserProfile created with ID: ${userProfileRef.id} for User: ${userRef.id}`);
-    } else {
+     } else {
         // Update existing UserProfile with new onboarding data if provided
         const existingProfile = existingProfiles.docs[0];
         const onboardingData = data.onboardingData || {};
@@ -474,9 +462,6 @@ export const createUserQuery = async (data)=>{
                 },
                 profilePictureURL: data.photoURL || existingProfile.data().profilePictureURL
             });
-            console.log(`UserProfile updated with ID: ${existingProfile.id} for User: ${userRef.id}`);
-        } else {
-            console.log(`UserProfile already exists with ID: ${existingProfile.id} for User: ${userRef.id}`);
         }
     }
     

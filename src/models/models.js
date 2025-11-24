@@ -86,7 +86,6 @@ export const handleConceptMapGeneration = async (chunkRefs, chunks)=>{
               }
         }
     });
-    console.log(response.text)
     return response.text
 }
 
@@ -115,16 +114,12 @@ export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, 
         propertyOrdering: ["numberOfCards", "flashcards"],
     }});    
     try {
-        const responseData = JSON.parse(response.text);
-        console.log('Generated flashcards:', responseData);
-        
+        const responseData = JSON.parse(response.text);        
         if (responseData.flashcards && responseData.flashcards.length > 0 && notebookRef) {
             // Store flashcards in Firestore
             const flashcardRefs = await createFlashcardsQuery(responseData.flashcards, notebookRef);
-            console.log(`Stored ${flashcardRefs.length} flashcards in Firestore for notebook ${notebookRef.id}`);
             return flashcardRefs;
         } else {
-            console.log('No flashcards generated or notebook reference missing');
             return [];
         }
     } catch (error) {
@@ -155,8 +150,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
             }
           });
           const endTime = performance.now();
-          console.log(`gemini-2.0-flash (naming) latency: ${endTime - startTime} ms`);
-
           if (title && title.text && typeof title.text === "string") {
             const newTitle = title.text.trim().replace(/^"|"$/g, '');
             await chatRef.update({ title: newTitle });
@@ -180,7 +173,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
     let message = [{ text: data.text }];
     if (inlineData) {
       message = message.concat(inlineData);
-      console.log("concated text and inlinedata");
     }
     message = [{ role: 'user', parts: message }];
 
@@ -211,9 +203,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
         }
       }
     });
-    console.log(`Intent Prompt Token count: ${response.usageMetadata.promptTokenCount}`)
     const intentEndTime = performance.now();
-    console.log(`gemini-2.5-flash-lite (intent) latency: ${intentEndTime - intentStartTime} ms`);
     totalTime += intentEndTime-intentStartTime;
     let intentResult = JSON.parse(response.text);
     var aiMessageRef = db.collection('Message').doc();
@@ -248,7 +238,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
         config: { outputDimensionality: modelLimits.vectorDim },
       });
       const embeddingEndTime = performance.now();
-      console.log(`gemini-embedding-exp-03-07 latency: ${embeddingEndTime - embeddingStartTime} ms`);
       totalTime += embeddingEndTime - embeddingStartTime;
       let queryStartTime = performance.now();
       let queryVector = embedding.embeddings[0].values;
@@ -258,7 +247,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
         with_payload: true,
       });
       let queryEndTime = performance.now();
-      console.log(`vector retrieval time:${queryEndTime-queryStartTime}ms`);
       totalTime += queryEndTime - queryStartTime;
       
       let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
@@ -267,8 +255,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
       let chunks = await handleBulkChunkRetrieval(chunkPaths);
       let chunkLatency = performance.now() - chunkStartTime;
       totalTime += chunkLatency;
-      console.log(`Chunk retrieval latency:${chunkLatency}`);
-
       chunks.forEach((chunk, index) => {
         const chunkId = qdrantResults[index]?.payload?.chunkID;
         if (chunkId) {
@@ -278,11 +264,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
       });
     }
 
-    var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)
-
-
-    console.log(`This is the agentModel:${modelLimits.agentModel}`);
-    
+    var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)    
     return agentResponse;
   }catch(err){
     console.log(`[ERROR]: handleAgent:${err}`);
@@ -298,8 +280,6 @@ export const handleQuizGeneration = async (chatId, chunks) => {
       const chunkText = chunk.text || (chunk.content && chunk.content[0] && chunk.content[0].text) || '';
       return `<chunkID: ${chunk.chunkId}>\n[${chunkText}]`;
     }).join('\n\n');
-
-    console.log(`Here ye texts: ${texts}`);
     const prompt = `Based on the following text, generate a 10-question multiple-choice quiz.
 ---
 CONTEXT:
@@ -368,10 +348,8 @@ RULES:
 
     if (quizData && quizData.length > 0) {
       const quizRef = await createQuizQuery(chatId, quizData);
-      console.log(`Stored quiz ${quizRef.id} in Firestore for chat ${chatId}`);
       return quizRef;
     } else {
-      console.log('No quiz data generated.');
       return null;
     }
   } catch (error) {
@@ -395,13 +373,9 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
    * This function should handle running the agent, Takes the chat history and runs inference
    */
   var userObj = userMap.get(userId);
-  if(!userObj){
-    console.log(`UserObj:${userObj}`);
-  }
   var plan = userObj.plan;
   var modelLimits = getModelConfig(plan);
   let prompt = agentPrompt();
-  console.log(`History:${JSON.stringify(chatObj.history)}`)
   let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length-1), chatObj.chunks);
   var agentResponse;
   var isMedia = false;
@@ -467,7 +441,6 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
           } else {
             const data = await response.json();
             isMedia = true;
-            console.log("Video generation server responded:", data);
           }
         } catch (err) {
           functionResponsePart = {
@@ -511,7 +484,6 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
         },)
        await createMessageQuery({content:functionResponsePart, role:'system', chatRef})
       }else{
-        console.log('video gen is generating...');
         break;
       }
      

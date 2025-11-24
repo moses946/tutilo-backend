@@ -15,7 +15,6 @@ export async function handleInitTransaction(req, res){
          * } 
          */
         const { email, plan } = req.body;
-        console.log(`plan:${plan}`);
         // Map plan types to amounts (in kobo/cents)
         const planAmounts = {
             'plus': 50000,   // 500 NGN
@@ -27,7 +26,6 @@ export async function handleInitTransaction(req, res){
         if (!amount) {
             return res.status(400).json({ message: 'Invalid subscription plan.' });
         }
-        console.log('hitting paystack endpoint');
         let response = await fetch(`${payStackURL}/transaction/initialize`, {
             method:'POST',
             headers:{
@@ -41,13 +39,10 @@ export async function handleInitTransaction(req, res){
             })
         });
         if(!response.ok){
-            console.log(`Server was not ok with the request:${response.status}`)
             res.status(response.status).json({message:'transaction init failed'})
         }else{
-            console.log('paystack responded')
             let result = await response.json();
             if(result.status&&result.data.access_code){
-                console.log('sending access code back to the user')
                 res.status(response.status).json({message:result.message, status:result.status, accessCode:result.data.access_code})
             }
             
@@ -73,9 +68,6 @@ export async function handleTransactionVerification(req, res){
                 'Content-Type':'application/json'
             }
         });
-
-        console.log(`Paystack verification`)
-        console.log(paystackResponse.status)
         const { status, data } = await paystackResponse.json();
 
         // 2. CHECK IF PAYSTACK CONFIRMS SUCCESS
@@ -87,7 +79,6 @@ export async function handleTransactionVerification(req, res){
         // The amount is in the smallest currency unit (e.g., kobo, cents)
         const expectedAmount = 500 * 100; // e.g., 500 NGN = 50000 kobo
         if (data.amount !== expectedAmount) {
-             console.log(`Tampering attempt! User ${userID} paid ${data.amount} but expected ${expectedAmount}`);
              return res.status(400).json({ message: 'Invalid payment amount.' });
         }
 

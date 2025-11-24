@@ -23,7 +23,6 @@ export async function handleOnboarding(req, res){
             res.status(401).json({error: 'Invalid token'});
             return
         }
-        console.log(decoded);
         // Prepare user data for database
         let displayName = (decoded.displayName || "").split(" ");
         const userData = {
@@ -34,11 +33,9 @@ export async function handleOnboarding(req, res){
             photoURL:data.photoURL || decoded.picture,
             onboardingData: data.onboardingData || null
         };
-        console.log(userData);
         await createUserQuery(userData);
         res.json({message:'user created successfully'});
     }catch(err){
-        console.log(`Error while creating user`);
         console.log(`ERROR:${err}`);
         res.status(500).json({error: 'Failed to create user'});
     }
@@ -100,8 +97,6 @@ export async function handleLogin(req, res){
         let subscription = userData && userData.subscription ? userData.subscription : 'free';
         // check if onboarding is done
         let isOnboardingComplete = userData && userData.isOnboardingComplete?true:false;
-        console.log(`User sub:${subscription}`)
-        console.log(`User streak:${streak}`);
         res.json({
             message: 'Login successful',
             subscription: subscription,
@@ -114,43 +109,3 @@ export async function handleLogin(req, res){
         res.status(500).json({error:'Error while logging user in'});
     }
 }
-// export async function handleLogin(req, res){
-//     try{
-//         // decode the token
-//         let data = req.body
-//         if(!data.token){
-//             res.status(400).json({error: 'Token is required'});
-//             return
-//         }
-//         let decoded = await verifyToken(data.token);
-//         if(!decoded){
-//             res.status(401).json({error: 'Invalid token'});
-//             return
-//         }
-        
-//         // Update user's last login timestamp
-//         let userRef = db.collection('User').doc(decoded.uid);
-//         // Fetch user document and subscription status
-//         let userDoc = await userRef.get();
-//         let userData = userDoc.data();
-//         // get the last login
-//         userData.lastLogin
-//         await userRef.update({
-//             lastLogin: admin.firestore.FieldValue.serverTimestamp()
-//         });
-        
-//         let subscription = userData && userData.subscription ? userData.subscription : 'free';
-//         // check if onboarding is done
-//         let isOnboardingComplete = userData && userData.isOnboardingComplete?true:false;
-//         console.log(`User sub:${subscription}`)
-//         res.json({
-//             message: 'Login successful',
-//             subscription: subscription,
-//             isOnboardingComplete
-//         });
-//     }catch(err){
-//         console.log('Error while logging user in');
-//         console.log(`ERROR:${err}`);
-//         res.status(500).json({error:'Error while logging user in'});
-//     }
-// }

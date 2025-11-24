@@ -41,10 +41,8 @@ export async function videoReadyWebhook(req, res) {
     chatObj.history.push(functionResponse)
     var response = await agentLoop(userID, chatObj, chatRef, [functionResponse])
     try{
-        console.log(`Here is the socket:${client_sockets} -- message id:${chatId}`)
         // get the message ref and update
         if(errorLog && client_sockets){
-            console.log(`Error from video_gen service:${errorLog}`);
             throw new Error('Video generation failed');
         }
         for(const socket of client_sockets){
@@ -69,21 +67,5 @@ export async function videoReadyWebhook(req, res) {
             }
         }
     }
-    
-    // const jobInfo = jobs.get(jobId);
-
-    // if (jobInfo) {
-    //     // Find the user associated with this job
-    //     const { userId } = jobInfo;
-
-        // Use WebSockets, push notifications, or another method to notify the user
-        // For example, using a simplified WebSocket emitter:
-        // global.webSocketServer.to(userId).emit('video_ready', { status, videoUrl });
-        
-    console.log(`Notifying user  that their video is ready at ${videoUrl}`);
-    
-    
-   
-
     res.status(200).send("Webhook received.");
 };

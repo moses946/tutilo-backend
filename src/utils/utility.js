@@ -30,7 +30,6 @@ export const handleBulkFileUpload = async (files, basePath)=>{
     const uploads = files.map((file)=>{
         const safeName = file.originalname;
         const destination = `${basePath}/${safeName}`;
-        console.log(`This is the destination:${destination}`)
         return handleFileUpload(file, destination);
     });
     return Promise.all(uploads);
@@ -114,10 +113,7 @@ export const generateSignedUrl = async (path, expiresInSeconds = 3600) => {
 
 */
 export const handleEmbedding = async (pages)=>{
-    console.log('Embedding...');
-    console.log(pages[0]);
     pages = pages.map((page ,index)=>page.text)
-    console.log(pages[0]);
     const response = await ai.models.embedContent(
         {
             model:'gemini-embedding-exp-03-07',
@@ -126,7 +122,6 @@ export const handleEmbedding = async (pages)=>{
             outputDimensionality: 256,
         }
     );
-    console.log('Embedding:', response.embeddings.length);
     return response.embeddings
     
 }
@@ -137,9 +132,7 @@ export const handleEmbedding = async (pages)=>{
   Output: Array of Qdrant point IDs
 */
 export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collectionName = 'notebook_chunks', vectorDim=256) => {
-    try {
-        console.log(`Creating embeddings for ${chunks.length} chunks...`);
-        
+    try { 
         // Extract text content from chunks
         // Batch functionality: process up to 100 chunks per embedding request
         const texts = chunks.map(chunk => chunk.text);
@@ -159,11 +152,7 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
             }
         }
         // For downstream code compatibility, mimic the original response object
-        const response = { embeddings: allEmbeddings };
-        
-        console.log(`Generated ${response.embeddings.length} embeddings`);
-        console.log(`Shape: ${response.embeddings[0].values.length}`)
-        
+        const response = { embeddings: allEmbeddings };        
         // Prepare points for Qdrant with chunkID in payload
         const points = response.embeddings.map((embedding, index) => ({
             //  Unique ID
@@ -179,7 +168,6 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
         try {
             let collection = await qdrantClient.getCollection(collectionName);
             if(!collection){
-                console.log(`Creating collection, there was none: ${collectionName}`);
                 await qdrantClient.createCollection(collectionName, {
                     vectors: {
                         size: vectorDim,
@@ -189,7 +177,6 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
             }
         } catch (error) {
             if (error.status === 404) {
-                console.log(`Creating collection: ${collectionName}`);
                 await qdrantClient.createCollection(collectionName, {
                     vectors: {
                         size: vectorDim,
@@ -213,10 +200,7 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
             // Making the batch size dynamic
             batchSize = Math.min(batchSize, points.length - i);
             uploadedPoints.push(...batch.map(point => point.id));
-            console.log(`Uploaded batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(points.length / batchSize)}`);
         }
-        
-        console.log(`Successfully uploaded ${uploadedPoints.length} points to Qdrant`);
         return uploadedPoints;
         
     } catch (error) {
@@ -229,7 +213,6 @@ export const handleNotebookUpdate = async(notebookID, materialRefs)=>{
     const notebookRef = db.collection('Notebook').doc(notebookID);
   
     await updateNotebookWithNewMaterialQuery(notebookRef, materialRefs);
-    console.log('Notebook updated with new material references');
 }
 
 export const handleNotebookDeletion = async (notebookId)=>{
@@ -244,7 +227,6 @@ export const handleNotebookDeletion = async (notebookId)=>{
         // delete the qdrant collection
         await qdrantClient.deleteCollection(notebookId);
         await deleteNotebookQuery(notebookId);
-        console.log(`Notebook Deletion was a success:${notebookId}`);
     }catch(err){
         // switch it back to isDeleted false
         console.error('Notebook deletion failed:', err);
@@ -254,7 +236,6 @@ export const handleNotebookDeletion = async (notebookId)=>{
 export const handleBulkNotebookDeletion = async (notebookIDs) =>{
     try{
         await Promise.all(notebookIDs.map((id)=>handleNotebookDeletion(id)));
-        console.log(`Bulk deletions have worked`)
     }catch (err){
         console.log(`Error in bulk deletions`);
     }
@@ -272,11 +253,8 @@ export const handleSearchForDeletedNotebooks = async ()=>{
 
 export const handleDeleteChat = async (notebookId, chatId)=>{
      // delete chat related stuff on db
-     console.log(`Deleting chat query`);
      await deleteChatQuery(chatId);
-     console.log(`Deleted chat query`);
      await bucket.deleteFiles({prefix:`notebooks/${notebookId}/chats/${chatId}/`})
-     console.log(`Deleted bucket files`);
 }
 
 export const handleBulkDeleteChat = async (notebookId, chatIds)=>{

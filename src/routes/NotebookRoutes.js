@@ -40,7 +40,6 @@ async function validateUploads(req, res, next) {
             });
         }
     }
-    console.log('file checks passed')
     // If all checks pass, proceed to the main handler
     next();
 }

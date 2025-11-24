@@ -134,155 +134,160 @@ export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, 
 }
 
 export const handleRunAgent = async (req, data, chatObj, chatRef) => {
-  let plan = req.user.subscription;
-  var modelLimits = getModelConfig(plan);
-  var totalTime  = 0;
-  let history = chatObj.history.slice(0, chatObj.history.length - 1);
-  let intentCompleteMessage = promptPrefix(history, chatObj.chunks);
-  // naming the chat
-  if (chatObj.history.length > 1 && chatRef) {
-    const chatDoc = await chatRef.get();
-    if (chatDoc.exists) {
-      const data = chatDoc.data();
-      if (data.title === "default") {
-        const startTime = performance.now();
-        let title = await ai.models.generateContent({
-          model: 'gemini-2.0-flash',
-          contents: JSON.stringify(chatObj.history),
-          config: {
-            systemInstruction: chatNamingPrompt(chatObj)
-          }
-        });
-        const endTime = performance.now();
-        console.log(`gemini-2.0-flash (naming) latency: ${endTime - startTime} ms`);
+  try{
+    let plan = req.user.subscription;
+    var modelLimits = getModelConfig(plan);
+    var totalTime  = 0;
+    let history = chatObj.history.slice(0, chatObj.history.length - 1);
+    let intentCompleteMessage = promptPrefix(history, chatObj.chunks);
+    // naming the chat
+    if (chatObj.history.length > 1 && chatRef) {
+      const chatDoc = await chatRef.get();
+      if (chatDoc.exists) {
+        const data = chatDoc.data();
+        if (data.title === "default") {
+          const startTime = performance.now();
+          let title = await ai.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: JSON.stringify(chatObj.history),
+            config: {
+              systemInstruction: chatNamingPrompt(chatObj)
+            }
+          });
+          const endTime = performance.now();
+          console.log(`gemini-2.0-flash (naming) latency: ${endTime - startTime} ms`);
 
-        if (title && title.text && typeof title.text === "string") {
-          const newTitle = title.text.trim().replace(/^"|"$/g, '');
-          await chatRef.update({ title: newTitle });
+          if (title && title.text && typeof title.text === "string") {
+            const newTitle = title.text.trim().replace(/^"|"$/g, '');
+            await chatRef.update({ title: newTitle });
+          }
         }
       }
     }
-  }
 
-  chatObj.history = chatObj.history || [];
-  chatObj.chunks = chatObj.chunks || {};
-  let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
-  let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
+    chatObj.history = chatObj.history || [];
+    chatObj.chunks = chatObj.chunks || {};
+    let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
+    let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
 
-  let inlineData;
-  var isMedia;
-  if (req.files.length > 0) {
-    inlineData = req.files.map((file) => ({ mimeType: file.mimetype, data: Buffer.from(file.buffer).toString('base64') }));
-    inlineData = inlineData.map((data) => ({ inlineData: data }));
-  }
-
-  let message = [{ text: data.text }];
-  if (inlineData) {
-    message = message.concat(inlineData);
-    console.log("concated text and inlinedata");
-  }
-  message = [{ role: 'user', parts: message }];
-
-  const intentStartTime = performance.now();
-  let response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-lite',
-    contents: intentCompleteMessage.concat(message),
-    config: {
-      thinkingConfig:{
-        thinkingBudget:0
-      },
-      systemInstruction: intentPrompt(summary),
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          isInDomain: { type: Type.BOOLEAN },
-          messageIfOutOfDomain: { type: Type.STRING },
-          retrievalNeeded: { type: Type.BOOLEAN },
-          ragQuery: { type: Type.STRING }
-        },
-        propertyOrdering: [
-          'isInDomain',
-          'messageIfOutOfDomain',
-          'retrievalNeeded',
-          'ragQuery'
-        ]
-      }
+    let inlineData;
+    var isMedia;
+    if (req.files.length > 0) {
+      inlineData = req.files.map((file) => ({ mimeType: file.mimetype, data: Buffer.from(file.buffer).toString('base64') }));
+      inlineData = inlineData.map((data) => ({ inlineData: data }));
     }
-  });
-  console.log(`Intent Prompt Token count: ${response.usageMetadata.promptTokenCount}`)
-  const intentEndTime = performance.now();
-  console.log(`gemini-2.5-flash-lite (intent) latency: ${intentEndTime - intentStartTime} ms`);
-  totalTime += intentEndTime-intentStartTime;
-  let intentResult = JSON.parse(response.text);
-  var aiMessageRef = db.collection('Message').doc();
 
-  if (!intentResult.isInDomain && intentResult.messageIfOutOfDomain) {
-    chatObj.history.push({
-      role: "model",
-      parts: [
-        {
-          text: intentResult.messageIfOutOfDomain,
+    let message = [{ text: data.text }];
+    if (inlineData) {
+      message = message.concat(inlineData);
+      console.log("concated text and inlinedata");
+    }
+    message = [{ role: 'user', parts: message }];
+
+    const intentStartTime = performance.now();
+    let response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-lite',
+      contents: intentCompleteMessage.concat(message),
+      config: {
+        thinkingConfig:{
+          thinkingBudget:0
         },
-      ],
-    });
-    aiMessageRef.set({
-      chatID: chatRef,
-      content: JSON.stringify([{ text: intentResult.messageIfOutOfDomain }]),
-      references: [],
-      attachments: [],
-      role: 'model',
-      timestamp: admin.firestore.FieldValue.serverTimestamp()
-    });
-    let agentResponse = { message: intentResult.messageIfOutOfDomain };
-    return agentResponse;
-  }
-
-  if (intentResult.retrievalNeeded) {
-    const embeddingStartTime = performance.now();
-    let embedding = await ai.models.embedContent({
-      model: 'gemini-embedding-exp-03-07',
-      contents: [intentResult.ragQuery],
-      taskType: 'QUESTION_ANSWERING',
-      config: { outputDimensionality: modelLimits.vectorDim },
-    });
-    const embeddingEndTime = performance.now();
-    console.log(`gemini-embedding-exp-03-07 latency: ${embeddingEndTime - embeddingStartTime} ms`);
-    totalTime += embeddingEndTime - embeddingStartTime;
-    let queryStartTime = performance.now();
-    let queryVector = embedding.embeddings[0].values;
-    let qdrantResults = await qdrantClient.search(data.notebookID, {
-      vector: queryVector,
-      limit: 5,
-      with_payload: true,
-    });
-    let queryEndTime = performance.now();
-    console.log(`vector retrieval time:${queryEndTime-queryStartTime}ms`);
-    totalTime += queryEndTime - queryStartTime;
-    
-    let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
-    let chunkPaths = qdrantResults.map((result) => (`${chunkBasePath}${result.payload.chunkID}.json`));
-    let chunkStartTime = performance.now();
-    let chunks = await handleBulkChunkRetrieval(chunkPaths);
-    let chunkLatency = performance.now() - chunkStartTime;
-    totalTime += chunkLatency;
-    console.log(`Chunk retrieval latency:${chunkLatency}`);
-
-    chunks.forEach((chunk, index) => {
-      const chunkId = qdrantResults[index]?.payload?.chunkID;
-      if (chunkId) {
-        const text = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
-        chatObj.chunks[chunkId] = text.slice(0, 500);
+        systemInstruction: intentPrompt(summary),
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            isInDomain: { type: Type.BOOLEAN },
+            messageIfOutOfDomain: { type: Type.STRING },
+            retrievalNeeded: { type: Type.BOOLEAN },
+            ragQuery: { type: Type.STRING }
+          },
+          propertyOrdering: [
+            'isInDomain',
+            'messageIfOutOfDomain',
+            'retrievalNeeded',
+            'ragQuery'
+          ]
+        }
       }
     });
+    console.log(`Intent Prompt Token count: ${response.usageMetadata.promptTokenCount}`)
+    const intentEndTime = performance.now();
+    console.log(`gemini-2.5-flash-lite (intent) latency: ${intentEndTime - intentStartTime} ms`);
+    totalTime += intentEndTime-intentStartTime;
+    let intentResult = JSON.parse(response.text);
+    var aiMessageRef = db.collection('Message').doc();
+
+    if (!intentResult.isInDomain && intentResult.messageIfOutOfDomain) {
+      chatObj.history.push({
+        role: "model",
+        parts: [
+          {
+            text: intentResult.messageIfOutOfDomain,
+          },
+        ],
+      });
+      aiMessageRef.set({
+        chatID: chatRef,
+        content: JSON.stringify([{ text: intentResult.messageIfOutOfDomain }]),
+        references: [],
+        attachments: [],
+        role: 'model',
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+      let agentResponse = { message: intentResult.messageIfOutOfDomain };
+      return agentResponse;
+    }
+
+    if (intentResult.retrievalNeeded) {
+      const embeddingStartTime = performance.now();
+      let embedding = await ai.models.embedContent({
+        model: 'gemini-embedding-exp-03-07',
+        contents: [intentResult.ragQuery],
+        taskType: 'QUESTION_ANSWERING',
+        config: { outputDimensionality: modelLimits.vectorDim },
+      });
+      const embeddingEndTime = performance.now();
+      console.log(`gemini-embedding-exp-03-07 latency: ${embeddingEndTime - embeddingStartTime} ms`);
+      totalTime += embeddingEndTime - embeddingStartTime;
+      let queryStartTime = performance.now();
+      let queryVector = embedding.embeddings[0].values;
+      let qdrantResults = await qdrantClient.search(data.notebookID, {
+        vector: queryVector,
+        limit: 5,
+        with_payload: true,
+      });
+      let queryEndTime = performance.now();
+      console.log(`vector retrieval time:${queryEndTime-queryStartTime}ms`);
+      totalTime += queryEndTime - queryStartTime;
+      
+      let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
+      let chunkPaths = qdrantResults.map((result) => (`${chunkBasePath}${result.payload.chunkID}.json`));
+      let chunkStartTime = performance.now();
+      let chunks = await handleBulkChunkRetrieval(chunkPaths);
+      let chunkLatency = performance.now() - chunkStartTime;
+      totalTime += chunkLatency;
+      console.log(`Chunk retrieval latency:${chunkLatency}`);
+
+      chunks.forEach((chunk, index) => {
+        const chunkId = qdrantResults[index]?.payload?.chunkID;
+        if (chunkId) {
+          const text = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
+          chatObj.chunks[chunkId] = text.slice(0, 500);
+        }
+      });
+    }
+
+    var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)
+
+
+    console.log(`This is the agentModel:${modelLimits.agentModel}`);
+    
+    return agentResponse;
+  }catch(err){
+    console.log(`[ERROR]: handleAgent:${err}`);
+    throw Error(err);
   }
-
-  var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)
-
-
-  console.log(`This is the agentModel:${modelLimits.agentModel}`);
-  
-  return agentResponse;
 }
 
 

@@ -2,7 +2,7 @@ import express from 'express';
 import {upload} from '../utils/utility.js'
 import { planLimits } from '../config/plans.js';
 
-import { handleConceptChatCreate, handleConceptDetail, handleConceptList, handleConceptMapRetrieval, handleMaterialDownload, handleNotebookCreation, handleNotebookDeletion, handleNotebookEditFetch, handleNotebookFetch, handleNotebookRead, handleNotebookUpdate, handleUserProgressUpdate } from '../controllers/NotebookController.js';
+import { handleConceptChatCreate, handleConceptDetail, handleConceptList, handleConceptMapRetrieval, handleMaterialDownload, handleNotebookCreation, handleNotebookDeletion, handleNotebookEditFetch, handleNotebookFetch, handleNotebookRead, handleNotebookUpdate, handleUserProgressUpdate, handleChunkFetch } from '../controllers/NotebookController.js';
 
 
 // Helper to convert MB to bytes
@@ -57,4 +57,5 @@ notebookRouter.get('/:id/concepts/:conceptId', handleConceptDetail);
 notebookRouter.post('/:id/concepts/:conceptId/chat', handleConceptChatCreate);
 notebookRouter.get('/:id/materials/:materialId/download', handleMaterialDownload);
 notebookRouter.put('/:id/concepts/:conceptId/progress', handleUserProgressUpdate);
+notebookRouter.get('/chunks/:chunkId', handleChunkFetch); 
 export default notebookRouter

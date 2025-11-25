@@ -373,9 +373,12 @@ export async function resolveConceptContext({ notebookId, conceptId }) {
     }
     const chunkIds = node.data?.chunkIds || [];
 
-    const chunkSnaps = await Promise.all(
-        chunkIds.map((chunkId) => db.collection('Chunk').doc(chunkId).get())
-    );
+    // OPTIMIZATION: Use getAll for batch retrieval instead of Promise.all mapping
+    const chunkRefs = chunkIds.map(id => db.collection('Chunk').doc(id));
+    let chunkSnaps = [];
+    if(chunkRefs.length > 0) {
+        chunkSnaps = await db.getAll(...chunkRefs);
+    }
 
     const materialMap = new Map();
     const chunks = [];
@@ -401,11 +404,7 @@ export async function resolveConceptContext({ notebookId, conceptId }) {
             });
         }
 
-        if (!materialId) {
-            continue;
-        }
-
-        if (!materialMap.has(materialId)) {
+        if (materialId && !materialMap.has(materialId)) {
             materialMap.set(materialId, materialRef);
         }
     }
@@ -418,6 +417,8 @@ export async function resolveConceptContext({ notebookId, conceptId }) {
     chunks.forEach((chunk, index) => {
         chunk.text = chunkContents[index];
     });
+    // Return chunks sorted by page number for logical navigation
+    chunks.sort((a, b) => a.pageNumber - b.pageNumber);
 
     const materials = [];
 
@@ -744,9 +745,10 @@ export async function handleNotebookFetch(req, res) {
 
         const notebookData = notebookSnap.data();
         // Fetch concept map data for the notebook
-        const conceptMapSnapshot = await db.collection('ConceptMap')
-            .where('notebookID', '==', notebookRef)
-            .get();
+        const [conceptMapSnapshot, flashcardsSnapshot] = await Promise.all([
+            db.collection('ConceptMap').where('notebookID', '==', notebookRef).get(),
+            db.collection('Flashcard').where('notebookID', '==', notebookRef).get()
+        ]);
 
 
         let conceptMapData = null;
@@ -756,11 +758,6 @@ export async function handleNotebookFetch(req, res) {
             // Progress is stored directly on the concept map
             conceptMapData.progress = conceptMapData.progress || {};
         }
-
-        // Fetch flashcards if they exist
-        const flashcardsSnapshot = await db.collection('Flashcard')
-            .where('notebookID', '==', notebookRef)
-            .get();
 
         let flashcardsData = null;
         if (!flashcardsSnapshot.empty) {
@@ -783,6 +780,55 @@ export async function handleNotebookFetch(req, res) {
             error: 'Failed to fetch notebook data',
             details: err.message
         });
+    }
+}
+
+export async function handleChunkFetch(req, res) {
+    try {
+        const { chunkId } = req.params;
+        
+        if (!chunkId) {
+            return res.status(400).json({ error: 'Chunk ID is required' });
+        }
+
+        // 1. Get the Chunk Document
+        const chunkRef = db.collection('Chunk').doc(chunkId);
+        const chunkSnap = await chunkRef.get();
+
+        if (!chunkSnap.exists) {
+            return res.status(404).json({ error: 'Chunk not found' });
+        }
+
+        const chunkData = chunkSnap.data();
+
+        // 2. Get the associated Material Document
+        // The chunk contains a reference to the material
+        const materialRef = chunkData.materialID;
+        if (!materialRef) {
+            return res.status(404).json({ error: 'Material reference missing in chunk' });
+        }
+
+        const materialSnap = await materialRef.get();
+        if (!materialSnap.exists) {
+            return res.status(404).json({ error: 'Associated material not found' });
+        }
+
+        const materialData = materialSnap.data();
+
+        // 3. Return combined metadata needed for navigation
+        res.json({
+            chunkId: chunkId,
+            pageNumber: chunkData.pageNumber,
+            materialId: materialRef.id,
+            materialName: materialData.name,
+            storagePath: materialData.storagePath,
+            tokenCount: chunkData.tokenCount,
+            notebookId: materialData.notebookID?.id // Useful if we need to cross-check context
+        });
+
+    } catch (err) {
+        console.error('Error fetching chunk metadata:', err);
+        res.status(500).json({ error: 'Failed to fetch chunk details' });
     }
 }
 

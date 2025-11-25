@@ -18,16 +18,22 @@ export const authMiddleWare = async(req, res, next)=>{
         // tried to do custom claims, but did not work 
         // let plan = idToken.claims ? idToken.claims.plan:'free'
         let userDoc = await db.collection('User').doc(idToken.uid).get();
+        let userProfileDoc = await db.collection('UserProfile').doc(idToken.uid).get();
+        let userProfileRef = userProfileDoc.data();
         let userRef = userDoc.data();
         let plan = userRef && userRef.subscription ? userRef.subscription : 'free';
+        let firstName = userRef && userRef.firstName ? userRef.firstName : '';
+        let lastName = userRef && userRef.lastName ? userRef.lastName : '';
+        let learningPreferences = {learningPath:userProfileRef.preferences.learningPath, learningStyle:userProfileRef.preferences.learningStyle}
         req.user = {
             uid:idToken.uid,
             email:idToken.email,
-            subscription:plan
+            subscription:plan,
+            learningPreferences
         };
         let userObj = userMap.get(idToken.uid);
         if(!userObj){
-            userMap.set(idToken.uid, {plan})
+            userMap.set(idToken.uid, {plan, learningPreferences, firstName, lastName})
         }
     }catch(err){
         console.log('Error while verifying token', err);

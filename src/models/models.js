@@ -132,7 +132,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
   try{
     let plan = req.user.subscription;
     var modelLimits = getModelConfig(plan);
-    var totalTime  = 0;
     let history = chatObj.history.slice(0, chatObj.history.length - 1);
     let intentCompleteMessage = promptPrefix(history, chatObj.chunks);
     // naming the chat
@@ -160,6 +159,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
 
     chatObj.history = chatObj.history || [];
     chatObj.chunks = chatObj.chunks || {};
+    let chunkMetadata = {};
     let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
     let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
 
@@ -176,7 +176,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
     }
     message = [{ role: 'user', parts: message }];
 
-    const intentStartTime = performance.now();
     let response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-lite',
       contents: intentCompleteMessage.concat(message),
@@ -203,8 +202,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
         }
       }
     });
-    const intentEndTime = performance.now();
-    totalTime += intentEndTime-intentStartTime;
     let intentResult = JSON.parse(response.text);
     var aiMessageRef = db.collection('Message').doc();
 
@@ -230,42 +227,52 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
     }
 
     if (intentResult.retrievalNeeded) {
-      const embeddingStartTime = performance.now();
       let embedding = await ai.models.embedContent({
         model: 'gemini-embedding-exp-03-07',
         contents: [intentResult.ragQuery],
         taskType: 'QUESTION_ANSWERING',
         config: { outputDimensionality: modelLimits.vectorDim },
       });
-      const embeddingEndTime = performance.now();
-      totalTime += embeddingEndTime - embeddingStartTime;
-      let queryStartTime = performance.now();
       let queryVector = embedding.embeddings[0].values;
       let qdrantResults = await qdrantClient.search(data.notebookID, {
         vector: queryVector,
         limit: 5,
         with_payload: true,
       });
-      let queryEndTime = performance.now();
-      totalTime += queryEndTime - queryStartTime;
       
       let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
       let chunkPaths = qdrantResults.map((result) => (`${chunkBasePath}${result.payload.chunkID}.json`));
-      let chunkStartTime = performance.now();
-      let chunks = await handleBulkChunkRetrieval(chunkPaths);
-      let chunkLatency = performance.now() - chunkStartTime;
-      totalTime += chunkLatency;
-      chunks.forEach((chunk, index) => {
-        const chunkId = qdrantResults[index]?.payload?.chunkID;
-        if (chunkId) {
-          const text = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
+      // OPTIMIZATION: Fetch Chunk Metadata from Firestore in parallel with Storage retrieval
+      // We need Page Number and Material ID to navigate the PDF on the frontend
+      const chunkDocRefs = qdrantResults.map(r => db.collection('Chunk').doc(r.payload.chunkID));
+      let [chunks, chunkDocs] = await Promise.all([
+        handleBulkChunkRetrieval(chunkPaths),
+        db.getAll(...chunkDocRefs) // Batch fetch from Firestore
+     ]);
+     chunks.forEach((chunkText, index) => {
+      const chunkId = qdrantResults[index]?.payload?.chunkID;
+      const chunkDoc = chunkDocs[index];
+      
+      if (chunkId && chunkDoc.exists) {
+          const docData = chunkDoc.data();
+          const text = typeof chunkText === 'string' ? chunkText : JSON.stringify(chunkText);
           chatObj.chunks[chunkId] = text.slice(0, 500);
-        }
+          
+          // Populate metadata for frontend
+          chunkMetadata[chunkId] = {
+              chunkId: chunkId,
+              pageNumber: docData.pageNumber,
+              materialId: docData.materialID.id, // Assuming reference
+              tokenCount: docData.tokenCount
+          };
+      }
       });
     }
 
     var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)    
-    return agentResponse;
+    
+    // Return metadata combined with message
+    return { ...agentResponse, chunkMetadata };
   }catch(err){
     console.log(`[ERROR]: handleAgent:${err}`);
     throw Error(err);
@@ -375,7 +382,7 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
   var userObj = userMap.get(userId);
   var plan = userObj.plan;
   var modelLimits = getModelConfig(plan);
-  let prompt = agentPrompt();
+  let prompt = agentPrompt(userObj);
   let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length-1), chatObj.chunks);
   var agentResponse;
   var isMedia = false;

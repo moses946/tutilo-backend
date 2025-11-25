@@ -744,6 +744,33 @@ export async function handleNotebookFetch(req, res) {
         }
 
         const notebookData = notebookSnap.data();
+
+        // --- INSERT START ---
+        // Resolve Material References
+        let materialsData = [];
+        if (Array.isArray(notebookData.materialRefs) && notebookData.materialRefs.length > 0) {
+            try {
+                // Fetch all referenced material documents
+                const materialSnapshots = await Promise.all(notebookData.materialRefs.map(ref => ref.get()));
+                
+                materialsData = materialSnapshots
+                    .filter(snap => snap.exists)
+                    .map(snap => {
+                        const data = snap.data();
+                        return {
+                            id: snap.id,
+                            name: data.name || data.storagePath || 'Untitled Material',
+                            storagePath: data.storagePath,
+                            // Include other fields if necessary
+                        };
+                    });
+            } catch (error) {
+                console.warn("Failed to resolve material refs", error);
+            }
+        }
+        // --- INSERT END ---
+
+
         // Fetch concept map data for the notebook
         const [conceptMapSnapshot, flashcardsSnapshot] = await Promise.all([
             db.collection('ConceptMap').where('notebookID', '==', notebookRef).get(),
@@ -770,6 +797,7 @@ export async function handleNotebookFetch(req, res) {
                 ...notebookData
             },
             mindmap: conceptMapData,
+            materials: materialsData,
             flashcards: flashcardsData,
             message: 'Notebook data retrieved successfully'
         });

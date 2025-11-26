@@ -16,7 +16,7 @@ import { handleBulkFileUpload } from "../utils/utility.js";
     chunkID:concept
  }
 */
-var chatMap = new Map();
+export var chatMap = new Map();
 
 export async function handleCreateChat(req, res){
     try {
@@ -64,8 +64,6 @@ export async function handleReadChats(req, res){
             id: doc.id,
             ...doc.data()
         }));
-        
-        // console.log('Found chats:', chats.length);
         res.json(chats);
     } catch (error) {
         console.error('Error fetching chats:', error);
@@ -123,28 +121,24 @@ export async function handleCreateMessage(req, res){
     try{// get the chat Id
         let now = admin.firestore.FieldValue.serverTimestamp();
         let data = req.body;
-        console.log(`Data keys:${Object.keys(data)}`)
         let chatID = req.params.chatID;
         let chatRef = db.collection('Chat').doc(chatID);
         // take the attachments and save in cloud storage
         let files;
         if(req.files){
-            console.log(`Received ${req.files.length} files`);
             files = req.files;
             let attachmentBasePath = `notebooks/${data.notebookID}/chats/${chatID}`
             files = await handleBulkFileUpload(files, attachmentBasePath);
         }
         // create a message ref and add attachements
-        createMessageQuery({chatRef, message:data.text, role:'user', attachments:files})
+        createMessageQuery({chatRef, content:[{text:data.text}], role:'user', attachments:files})
         // store the history text only, Will build the attachments for Gemini from the files field in the request
         let message = {role:'user', parts:[{text:data.text}]};
         // adding the message to history, because even if the AI generation fails the message will still be seen in history
         if (!chatMap.has(chatID)){ 
-            console.log('Map does not have the chatID');
             chatMap.set(chatID, {history:[], chunks:{}})
         };
         if (!Array.isArray(chatMap.get(chatID).history)){ 
-            console.log('history is not an array')
             chatMap.delete(chatID);
             chatMap.set(chatID, {history:[], chunks:{}});
         }
@@ -156,8 +150,7 @@ export async function handleCreateMessage(req, res){
         // the agent returns a JSON with {message:string}
         // createMessageQuery({chatRef, message:result.message, role:'model'})
     }catch(err){
-        console.log(`Error occurred while creating message`);
-        console.log(`ERROR:${err}`);
+        console.log(`ERROR--creating message:${err}`);
         res.status(500).json('Error while creating message');
     }
 
@@ -166,7 +159,6 @@ export async function handleCreateMessage(req, res){
 }
 
 export async function handleReadMessages(req, res){
-    // console.log('Fetching messages');
     // build cache
     let chatID = req.params.chatID;
     // fetch the messages related to this ID
@@ -183,7 +175,6 @@ export async function handleReadMessages(req, res){
     })
     // add the messages to map
     let chatObj = chatMap.get(chatID);
-    // console.log(chatObj)
     if(chatObj){
         chatObj.history = messages;
     }else{

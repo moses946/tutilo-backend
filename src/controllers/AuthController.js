@@ -1,6 +1,8 @@
 import { createUserQuery } from "../models/query.js";
 import admin, { db, verifyToken } from "../services/firebase.js"
 
+
+
 export async function handleOnboarding(req, res){
     // do some sanitization...
     try{
@@ -21,7 +23,6 @@ export async function handleOnboarding(req, res){
             res.status(401).json({error: 'Invalid token'});
             return
         }
-        console.log(decoded);
         // Prepare user data for database
         let displayName = (decoded.displayName || "").split(" ");
         const userData = {
@@ -32,15 +33,14 @@ export async function handleOnboarding(req, res){
             photoURL:data.photoURL || decoded.picture,
             onboardingData: data.onboardingData || null
         };
-        console.log(userData);
         await createUserQuery(userData);
         res.json({message:'user created successfully'});
     }catch(err){
-        console.log(`Error while creating user`);
         console.log(`ERROR:${err}`);
         res.status(500).json({error: 'Failed to create user'});
     }
 }
+
 
 export async function handleLogin(req, res){
     try{
@@ -56,7 +56,7 @@ export async function handleLogin(req, res){
             return
         }
         
-        // Update user's last login timestamp
+        // Get user reference
         let userRef = db.collection('User').doc(decoded.uid);
         
         // Fetch user document first to calculate streak

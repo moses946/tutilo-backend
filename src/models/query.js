@@ -26,6 +26,7 @@ export const createNotebookQuery = async (notebook) => {
         userID: userRef,
         dateCreated: now,
         dateUpdated: now,
+        isDeleted:false,
         materialRefs: [], // Will be populated with material references
         status: 'processing',
         links: Array.isArray(notebook.links) ? notebook.links : [],
@@ -52,7 +53,6 @@ export const createMaterialQuery = async (notebookRef, materials) => {
             chunkRefs: [] // Will be populated with chunk references
         });
         materialRefs.push(materialRef);
-        console.log('Material added successfully');
     } else {
         const batch = db.batch();
         materials.forEach((material) => {
@@ -69,7 +69,6 @@ export const createMaterialQuery = async (notebookRef, materials) => {
             materialRefs.push(materialRef);
         });
         await batch.commit();
-        console.log('Batch documents uploaded successfully');
     }
     
     return materialRefs;
@@ -113,7 +112,6 @@ export const createChunksQuery = async (chunks, materialRef) => {
 }
 
 export const createConceptMapQuery = async (result, notebookRef) => {
-    console.log("Inside concept map query");
     const conceptMapRef = await db.collection('ConceptMap').add({
         notebookID:notebookRef,
         graphData:{layout:result, progress:{}},
@@ -126,7 +124,7 @@ read queries
 export const readNotebooksQuery = async (userID) =>{
     let userRef = db.collection('User').doc(userID);
     // Fetch all notebooks where the userID field matches the given userID
-    let notebookRefs = await db.collection('Notebook').where('userID', '==', userRef).get();
+    let notebookRefs = await db.collection('Notebook').where('userID', '==', userRef).where('isDeleted', '==',false).get();
     const notebooks = [];
     notebookRefs.forEach(doc => {
         const data = doc.data();
@@ -220,7 +218,6 @@ export const updateChunksWithQdrantIds = async (chunkRefs, qdrantPointIds) => {
     });
     
     await batch.commit();
-    console.log(`Updated ${chunkRefs.length} chunks with Qdrant point IDs`);
 }
 
 /*
@@ -314,19 +311,17 @@ export const deleteNotebookQuery = async (notebookId) => {
     
     // Commit any remaining batches
     if (batchPromises.length > 0) {
-        console.log(`These are the batch promises:${batchPromises}`);
       await Promise.all(batchPromises);
     }
 
     // Finally, delete the notebook itself
     await notebookRef.delete();
-    console.log(`Notebook with ID:${notebookId} has been deleted`);
 };
 
 export const deleteChatQuery = async (chatId)=>{
     const chatRef = db.collection('Chat').doc(chatId);
     // get the messages
-    let messagesSnaps  = await db.collection('Chat').where('chatID', '==', chatId).get();
+    let messagesSnaps  = await db.collection('Message').where('chatID', '==', chatRef).get();
     let messagesRefs = messagesSnaps.docs.map(doc=>doc.ref)
     const docsToDelete = [...messagesRefs];
     const BATCH_SIZE = 500;
@@ -347,7 +342,6 @@ export const deleteChatQuery = async (chatId)=>{
     
     // Commit any remaining batches
     if (batchPromises.length > 0) {
-        console.log(`These are the batch promises:${batchPromises.length}`);
       await Promise.all(batchPromises);
     }
   
@@ -388,12 +382,13 @@ export const updateNotebookWithFlashcards = async (notebookRef, flashcardRef) =>
 export const createMessageQuery = async (data)=>{
     let aiMessageRef = await db.collection('Message').add({
         chatID:data.chatRef,
-        content:JSON.stringify([{text:data.message}]),
-        references:[],
-        attachments:[],
+        content:JSON.stringify(data.content),
+        references:data.references || [],
+        attachments:data.attachments || [],
         role:data.role,
         timestamp:admin.firestore.FieldValue.serverTimestamp()
     })
+    return aiMessageRef
 }
 
 // User collection related routes
@@ -415,7 +410,6 @@ export const createUserQuery = async (data)=>{
             subscription:'free',
             isOnboardingComplete:false
         })
-        console.log(`User created with ID: ${userRef.id}`);
     } else {
         // Update lastLogin for existing user
         await userRef.update({
@@ -425,7 +419,6 @@ export const createUserQuery = async (data)=>{
             lastName: data.lastName || userDoc.data().lastName,
             isOnboardingComplete:true
         });
-        console.log(`User updated with ID: ${userRef.id}`);
     }
     
     // Check if UserProfile already exists for this user
@@ -453,9 +446,7 @@ export const createUserQuery = async (data)=>{
             },
             userId: userRef // Reference to the User document
         })
-        
-        console.log(`UserProfile created with ID: ${userProfileRef.id} for User: ${userRef.id}`);
-    } else {
+     } else {
         // Update existing UserProfile with new onboarding data if provided
         const existingProfile = existingProfiles.docs[0];
         const onboardingData = data.onboardingData || {};
@@ -471,9 +462,6 @@ export const createUserQuery = async (data)=>{
                 },
                 profilePictureURL: data.photoURL || existingProfile.data().profilePictureURL
             });
-            console.log(`UserProfile updated with ID: ${existingProfile.id} for User: ${userRef.id}`);
-        } else {
-            console.log(`UserProfile already exists with ID: ${existingProfile.id} for User: ${userRef.id}`);
         }
     }
     

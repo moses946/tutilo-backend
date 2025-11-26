@@ -15,7 +15,8 @@ import { WebSocketServer } from 'ws';
 import url from "url";
 import { verifyToken } from './src/services/firebase.js';
 import { handleMaterialDownload } from './src/controllers/NotebookController.js';
-
+import cron from 'node-cron';
+import { handleBulkNotebookDeletion, handleSearchForDeletedNotebooks } from './src/utils/utility.js';
 
 
 dotenv.config();
@@ -24,6 +25,18 @@ var PORT = process.env.PORT
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({server});
+
+// Schedule a task to run every minute.
+cron.schedule('* * * * *', async() => {
+  console.log('This task runs every minute.');
+  let notebookIds = await handleSearchForDeletedNotebooks()
+  if(!notebookIds){
+    console.log('No job for the cronny, womp womp');
+    return
+  }
+  await handleBulkNotebookDeletion(notebookIds);
+  console.log('cron job has finished')
+});
 
 export var clientSocketsMap = new Map();
 // web socket code

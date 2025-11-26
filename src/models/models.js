@@ -1,12 +1,14 @@
 import 'dotenv/config';
 import { GoogleGenAI, Type } from "@google/genai";
-import { createFlashcardsQuery, createQuizQuery } from './query.js';
+import { createFlashcardsQuery, createMessageQuery, createQuizQuery } from './query.js';
 import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
-import { handleBulkChunkRetrieval, handleChunkRetrieval } from '../utils/utility.js';
-import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt } from '../config/types.js';
-import { text } from 'express';
+import { handleBulkChunkRetrieval, handleChunkRetrieval, handleSendToVideoGen } from '../utils/utility.js';
+import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt, promptPrefix, videoGenFunctionDeclaration } from '../config/types.js';
 import { getModelConfig } from '../config/plans.js';
+import { performance } from 'perf_hooks';
+import { userMap } from '../middleware/authMiddleWare.js';
+
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -84,7 +86,6 @@ export const handleConceptMapGeneration = async (chunkRefs, chunks)=>{
               }
         }
     });
-    console.log(response.text)
     return response.text
 }
 
@@ -113,16 +114,12 @@ export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, 
         propertyOrdering: ["numberOfCards", "flashcards"],
     }});    
     try {
-        const responseData = JSON.parse(response.text);
-        console.log('Generated flashcards:', responseData);
-        
+        const responseData = JSON.parse(response.text);        
         if (responseData.flashcards && responseData.flashcards.length > 0 && notebookRef) {
             // Store flashcards in Firestore
             const flashcardRefs = await createFlashcardsQuery(responseData.flashcards, notebookRef);
-            console.log(`Stored ${flashcardRefs.length} flashcards in Firestore for notebook ${notebookRef.id}`);
             return flashcardRefs;
         } else {
-            console.log('No flashcards generated or notebook reference missing');
             return [];
         }
     } catch (error) {
@@ -131,302 +128,148 @@ export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, 
     }
 }
 
-export const handleRunAgent = async (req, data, chatObj, chatRef)=>{
-  // prompt intent engine
-  // console.log("running agent");
-  // console.log(JSON.stringify(chatObj))
-  // getting the model config according to plan
-  let plan = req.user.subscription
-  var modelLimits = getModelConfig(plan);
-  
-  // naming the chat
-  if (chatObj.history.length > 1 && chatRef) {
-    // Get the document snapshot
-    const chatDoc = await chatRef.get();
-  
-    if (chatDoc.exists) {
-      const data = chatDoc.data();
-  
-      if (data.title === "default") {
-        
-        let title = await ai.models.generateContent({
-          model:'gemini-2.0-flash',
-          contents:JSON.stringify(chatObj.history),
-          config:{
-            systemInstruction:chatNamingPrompt(chatObj)
+export const handleRunAgent = async (req, data, chatObj, chatRef) => {
+  try{
+    let plan = req.user.subscription;
+    var modelLimits = getModelConfig(plan);
+    var totalTime  = 0;
+    let history = chatObj.history.slice(0, chatObj.history.length - 1);
+    let intentCompleteMessage = promptPrefix(history, chatObj.chunks);
+    // naming the chat
+    if (chatObj.history.length > 1 && chatRef) {
+      const chatDoc = await chatRef.get();
+      if (chatDoc.exists) {
+        const data = chatDoc.data();
+        if (data.title === "default") {
+          const startTime = performance.now();
+          let title = await ai.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: JSON.stringify(chatObj.history),
+            config: {
+              systemInstruction: chatNamingPrompt(chatObj)
+            }
+          });
+          const endTime = performance.now();
+          if (title && title.text && typeof title.text === "string") {
+            const newTitle = title.text.trim().replace(/^"|"$/g, '');
+            await chatRef.update({ title: newTitle });
           }
-        })
-      // Update the chatRef title field with the new title
-      if (title && title.text && typeof title.text === "string") {
-        const newTitle = title.text.trim().replace(/^"|"$/g, ''); // Remove surrounding quotes if present
-        await chatRef.update({ title: newTitle });
-        console.log(`Chat title updated to: ${newTitle}`);
-      }
+        }
       }
     }
-  }
-  /*
-  The prompt intent Engine needs all these
-  - notebook summary
-  - conversation history
-  - currently retrieved chunks (to prevent unneeded retrieval)  
-  */
-  // Ensure required structures exist on chatObj
-  chatObj.history = chatObj.history || [];
-  chatObj.chunks = chatObj.chunks || {};
-  let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
-  let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
-  // console.log(JSON.stringify(chatObj.history))
-  // console.log(summary)
-  // format the files in the right way for Gemini.
-  let inlineData;
-  var isMedia;
-  if(req.files.length>0){
-    console.log(`There are files:${req.files}`);
-    inlineData = req.files.map((file)=>({mimeType:file.mimetype, data:Buffer.from(file.buffer).toString('base64')}));
-    inlineData = inlineData.map((data)=>({inlineData:data}));
-    console.log("Finished packaging inlineData");
-  }
-  let message = [{text:data.text}];
-  if(inlineData){
-    message = message.concat(inlineData);
-    console.log("concated text and inlinedata");
-  }
-  message = [{role:'user', parts:message}];
-  let response = await ai.models.generateContent({
-    model:'gemini-2.5-flash-lite',
-    contents:message,
-    config:{
-      systemInstruction:intentPrompt(chatObj, summary),
-      responseMimeType:'application/json',
-      responseSchema:{
-        type: Type.OBJECT,
-        properties:{
-          isInDomain: { type: Type.BOOLEAN },
-          messageIfOutOfDomain: { type: Type.STRING },
-          retrievalNeeded: { type: Type.BOOLEAN },
-          ragQuery: { type: Type.STRING }
-        },
-        propertyOrdering: [
-          'isInDomain',
-          'messageIfOutOfDomain',
-          'retrievalNeeded',
-          'ragQuery'
-        ]
-      }
+
+    chatObj.history = chatObj.history || [];
+    chatObj.chunks = chatObj.chunks || {};
+    let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
+    let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
+
+    let inlineData;
+    var isMedia;
+    if (req.files.length > 0) {
+      inlineData = req.files.map((file) => ({ mimeType: file.mimetype, data: Buffer.from(file.buffer).toString('base64') }));
+      inlineData = inlineData.map((data) => ({ inlineData: data }));
     }
-  })
-  // console.log(response.text);
-  let intentResult = JSON.parse(response.text);
-  var aiMessageRef = db.collection('Message').doc()
-  // To retrieve or not to retrieve
-  if(!intentResult.isInDomain && intentResult.messageIfOutOfDomain){
-    console.log(`Message out of domain:${intentResult.messageIfOutOfDomain}`)
-    chatObj.history.push({
-      role: "model",
-      parts: [
-        {
-          text: intentResult.messageIfOutOfDomain,
-        },
-      ],
-    });
-    aiMessageRef.set({
-      chatID:chatRef,
-      content:JSON.stringify([{text:intentResult.messageIfOutOfDomain}]),
-      references:[],
-      attachments:[],
-      role:'model',
-      timestamp:admin.firestore.FieldValue.serverTimestamp()
-    })
-    let agentResponse = {message:intentResult.messageIfOutOfDomain}
-    return agentResponse
-  }
-  console.log('Prompt is in Domain');
-  // check if retrieval is needed
-  if(intentResult.retrievalNeeded){
-    // pass to the retrieval component
-    let embedding = await ai.models.embedContent({
-      model: 'gemini-embedding-exp-03-07',
-      contents: [intentResult.ragQuery],
-      taskType: 'RETRIEVAL_QUERY',
-      config: { outputDimensionality: modelLimits.vectorDim },
-    });
-    // Use the embedding from the intentResult.ragQuery for vector search in Qdrant
-    // Assume embedding variable is the result of ai.models.embedContent for the query
-    // embedding.embeddings[0].values is the vector for the query
-    let queryVector = embedding.embeddings[0].values;
-    // console.log(`Here is the notebookID:${data.notebookID}`)
-    // Perform vector search in Qdrant
-    let qdrantResults = await qdrantClient.search(data.notebookID, {
-      vector: queryVector,
-      limit: 5, // You can adjust the number of results as needed
-      with_payload: true
-    });
-    // console.log(qdrantResults);
-    let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
-    let chunkPaths = qdrantResults.map((result)=>(`${chunkBasePath}${result.payload.chunkID}.json`))
-    //let chunk = await handleChunkRetrieval(`notebooks/${data.notebookID}/chunks/${qdrantResults[0].payload.chunkID}.json`)
-    let chunks = await handleBulkChunkRetrieval(chunkPaths);
-    // console.log(chunks);
-    // get the chunks
 
-    // Add the chunks to the chat obj
-    chunks.forEach((chunk, index)=>{
-      const chunkId = qdrantResults[index]?.payload?.chunkID;
-      if(chunkId){
-        const text = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
-        chatObj.chunks[chunkId] = text.slice(0,500);
-      }
-    })
-
-  }
-
-  // Always proceed to the Agent phase (with or without new retrieval)
-  let prompt = agentPrompt(chatObj);
-  let videoGenFunctionDeclaration = {
-    name: 'video_gen',
-    description: 'Generates a video for math concept explanations',
-    parameters: {
-        type: Type.OBJECT,
-        properties:{
-          className:{
-            type:Type.STRING,
-            description:'The name of the class to be passed to manim command to render the scene'
-          },
-          code:{
-            type:Type.STRING,
-            description:'The manim code written in python, properly formatted obeying Python syntax'
-          },
-        },
-        required:['className', 'code']       
+    let message = [{ text: data.text }];
+    if (inlineData) {
+      message = message.concat(inlineData);
     }
-  };
-  let agentResponse;
-  console.log(`This is the agentModel:${modelLimits.agentModel}`)
-  while (true) {
-    agentResponse = await ai.models.generateContent({
-      model: modelLimits.agentModel,
-      contents: message,
+    message = [{ role: 'user', parts: message }];
+
+    const intentStartTime = performance.now();
+    let response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-lite',
+      contents: intentCompleteMessage.concat(message),
       config: {
         thinkingConfig:{
-          thinkingBudget:modelLimits.thinkingBudget
+          thinkingBudget:0
         },
-        systemInstruction: prompt,
-        tools: [
-          {
-            functionDeclarations: [videoGenFunctionDeclaration]
-          }
-        ]
+        systemInstruction: intentPrompt(summary),
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            isInDomain: { type: Type.BOOLEAN },
+            messageIfOutOfDomain: { type: Type.STRING },
+            retrievalNeeded: { type: Type.BOOLEAN },
+            ragQuery: { type: Type.STRING }
+          },
+          propertyOrdering: [
+            'isInDomain',
+            'messageIfOutOfDomain',
+            'retrievalNeeded',
+            'ragQuery'
+          ]
+        }
       }
     });
-    
-    if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
-      const functionCall = agentResponse.functionCalls[0]; // Assuming one function call
-      console.log(`Function to call: ${functionCall.name}`);
-      console.log(`Arguments: ${functionCall.args.code}`);
-      // You may want to process the function call here and update `message` accordingly
-      // For now, just return the function call as before
-      // Send the functionCall to http://172.30.182.137:8000
-      var functionResponsePart;
-      try {
-        const response = await fetch('http://172.30.182.137:8000/render', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({...functionCall.args, userID:req.user.uid, messageID:aiMessageRef.id})
-        });
-        if (!response.ok) {
-          functionResponsePart = {
-            name: functionCall.name,
-            response: {
-              result: "video generation failed, internal server error",
-            },
-          }
-          console.error("Error sending function call to video gen server:", response.status, response.statusText);
-        } else {
-          const data = await response.json();
-          isMedia = true;
-          console.log("Video generation server responded:", data);
-          functionResponsePart = {
-            name: functionCall.name,
-            response: {
-              result: "video generation has been generated",
-            },
-          }
-        }
-      } catch (err) {
-        functionResponsePart = {
-          name: functionCall.name,
-          response: {
-            result: `video generation failed. [ERROR]:${err}`,
-          },
-        }
-        console.error("Failed to send function call to video gen server:", err);
-      }
+    const intentEndTime = performance.now();
+    totalTime += intentEndTime-intentStartTime;
+    let intentResult = JSON.parse(response.text);
+    var aiMessageRef = db.collection('Message').doc();
+
+    if (!intentResult.isInDomain && intentResult.messageIfOutOfDomain) {
       chatObj.history.push({
         role: "model",
         parts: [
           {
-            functionCall: functionCall,
+            text: intentResult.messageIfOutOfDomain,
           },
         ],
       });
-      chatObj.history.push({
-        role: "system",
-        parts: [
-          {
-            functionResponse: functionResponsePart,
-          },
-        ],
+      aiMessageRef.set({
+        chatID: chatRef,
+        content: JSON.stringify([{ text: intentResult.messageIfOutOfDomain }]),
+        references: [],
+        attachments: [],
+        role: 'model',
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
       });
-      // save the ai response to the db
-      let aiFunctionCallRef = await db.collection('Message').add({
-        chatID:chatRef,
-        content:JSON.stringify(functionCall),
-        references:[],
-        attachments:[],
-        role:'model',
-        timestamp:admin.firestore.FieldValue.serverTimestamp()
-      })
-      let functionResponse = await db.collection('Message').add({
-        chatID:chatRef,
-        content:JSON.stringify(functionResponsePart),
-        references:[],
-        attachments:[],
-        role:'system',
-        timestamp:admin.firestore.FieldValue.serverTimestamp()
-    })
-        // Update the message variable to include the function call result and call
-      let messagefunc = [
-        agentResponse.candidates[0].content,
-        {
-          role: "system",
-          parts: [
-            {
-              functionResponse: functionResponsePart,
-            },
-          ],
-        },
-      ];
-      message.push(...messagefunc)
-      // return functionCall;
-    } else {
-      chatObj.history.push({role:"model", parts:[{text:agentResponse.text}]})
-      // console.log(JSON.stringify(chatObj.history));
-      // return agentResponse
-      break;
+      let agentResponse = { message: intentResult.messageIfOutOfDomain };
+      return agentResponse;
     }
+
+    if (intentResult.retrievalNeeded) {
+      const embeddingStartTime = performance.now();
+      let embedding = await ai.models.embedContent({
+        model: 'gemini-embedding-exp-03-07',
+        contents: [intentResult.ragQuery],
+        taskType: 'QUESTION_ANSWERING',
+        config: { outputDimensionality: modelLimits.vectorDim },
+      });
+      const embeddingEndTime = performance.now();
+      totalTime += embeddingEndTime - embeddingStartTime;
+      let queryStartTime = performance.now();
+      let queryVector = embedding.embeddings[0].values;
+      let qdrantResults = await qdrantClient.search(data.notebookID, {
+        vector: queryVector,
+        limit: 5,
+        with_payload: true,
+      });
+      let queryEndTime = performance.now();
+      totalTime += queryEndTime - queryStartTime;
+      
+      let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
+      let chunkPaths = qdrantResults.map((result) => (`${chunkBasePath}${result.payload.chunkID}.json`));
+      let chunkStartTime = performance.now();
+      let chunks = await handleBulkChunkRetrieval(chunkPaths);
+      let chunkLatency = performance.now() - chunkStartTime;
+      totalTime += chunkLatency;
+      chunks.forEach((chunk, index) => {
+        const chunkId = qdrantResults[index]?.payload?.chunkID;
+        if (chunkId) {
+          const text = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
+          chatObj.chunks[chunkId] = text.slice(0, 500);
+        }
+      });
+    }
+
+    var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)    
+    return agentResponse;
+  }catch(err){
+    console.log(`[ERROR]: handleAgent:${err}`);
+    throw Error(err);
   }
-  // console.log(agentResponse.text)
-  // save to db
-  aiMessageRef.set({
-    chatID:chatRef,
-    content:JSON.stringify([{text:agentResponse.text}]),
-    references:[],
-    attachments:[],
-    role:'model',
-    timestamp:admin.firestore.FieldValue.serverTimestamp()
-  })
-  return {message:agentResponse.text, media:isMedia}
 }
 
 
@@ -437,8 +280,6 @@ export const handleQuizGeneration = async (chatId, chunks) => {
       const chunkText = chunk.text || (chunk.content && chunk.content[0] && chunk.content[0].text) || '';
       return `<chunkID: ${chunk.chunkId}>\n[${chunkText}]`;
     }).join('\n\n');
-
-    console.log(`Here ye texts: ${texts}`);
     const prompt = `Based on the following text, generate a 10-question multiple-choice quiz.
 ---
 CONTEXT:
@@ -507,10 +348,8 @@ RULES:
 
     if (quizData && quizData.length > 0) {
       const quizRef = await createQuizQuery(chatId, quizData);
-      console.log(`Stored quiz ${quizRef.id} in Firestore for chat ${chatId}`);
       return quizRef;
     } else {
-      console.log('No quiz data generated.');
       return null;
     }
   } catch (error) {
@@ -518,3 +357,145 @@ RULES:
     return null;
   }
 };
+
+/**
+ * {
+ * userId:userObj
+ * }
+ * 
+ * userObj:{
+ *  plan:string
+ * }
+ */
+
+export async function agentLoop(userId, chatObj, chatRef, message=[]){
+  /**
+   * This function should handle running the agent, Takes the chat history and runs inference
+   */
+  var userObj = userMap.get(userId);
+  var plan = userObj.plan;
+  var modelLimits = getModelConfig(plan);
+  let prompt = agentPrompt();
+  let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length-1), chatObj.chunks);
+  var agentResponse;
+  var isMedia = false;
+  var aiMessageRef;
+  while (true){
+    agentResponse = await ai.models.generateContent({
+      model: modelLimits.agentModel,
+      contents: completeMessage.concat(message),
+      config: {
+        thinkingConfig: {
+          thinkingBudget: modelLimits.thinkingBudget
+        },
+        systemInstruction: prompt,
+        tools: [
+          {
+            functionDeclarations: [videoGenFunctionDeclaration]
+          }
+        ]
+      }
+    }); 
+    if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
+      const functionCall = agentResponse.functionCalls[0];
+      var functionResponsePart;
+      if(functionCall.name=='video_gen'){
+        try {
+          if(plan=='free'){
+            functionResponsePart = {
+              name: functionCall.name,
+              response: {
+                result: "video generation failed, free tier cannot generate videos",
+              },
+            };
+            chatObj.history.push({
+              role: "system",
+              parts: [
+                {
+                  functionResponse: functionResponsePart,
+                },
+              ],
+            });
+            message.push({
+              role: "system",
+              parts: [
+                {
+                  functionResponse: functionResponsePart,
+                },
+              ],
+            },)
+           await createMessageQuery({content:functionResponsePart, role:'system', chatRef})
+           continue
+
+          }
+          let data = {args:functionCall.args, uid:userId,  chatId:chatRef.id}
+          const response = await handleSendToVideoGen(data);  
+          if (!response.ok) {
+            functionResponsePart = {
+              name: functionCall.name,
+              response: {
+                result: "video generation failed, internal server error",
+              },
+            };
+            console.error("Error sending function call to video gen server:", response.status, response.statusText);
+          } else {
+            const data = await response.json();
+            isMedia = true;
+          }
+        } catch (err) {
+          functionResponsePart = {
+            name: functionCall.name,
+            response: {
+              result: `video generation failed. [ERROR]:${err}`,
+            },
+          };
+          console.error("Failed to send function call to video gen server:", err);
+        }
+     
+      }
+      chatObj.history.push({
+        role: "model",
+        parts: [
+          {
+            functionCall: functionCall,
+          },
+        ],
+      });
+      await createMessageQuery({content:functionCall, role:'model', chatRef})
+      let messagefunc = [
+        agentResponse.candidates[0].content
+      ]
+      if(functionResponsePart){
+        chatObj.history.push({
+          role: "system",
+          parts: [
+            {
+              functionResponse: functionResponsePart,
+            },
+          ],
+        });
+        messagefunc.push({
+          role: "system",
+          parts: [
+            {
+              functionResponse: functionResponsePart,
+            },
+          ],
+        },)
+       await createMessageQuery({content:functionResponsePart, role:'system', chatRef})
+      }else{
+        break;
+      }
+     
+      message.push(...messagefunc);
+
+
+    }else{
+      chatObj.history.push({ role: "model", parts: [{ text: agentResponse.text }] });
+      aiMessageRef = await createMessageQuery({content:[{text:agentResponse.text}], role:'model', chatRef})
+      break;
+    }
+  }
+  return { message: !isMedia?agentResponse.text:'Your video is being created, ready in a bit', media: isMedia, messageRef:aiMessageRef};
+
+}

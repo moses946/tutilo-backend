@@ -19,9 +19,9 @@ export const modelLimits = {
         flashcardModel:'gemini-2.5-flash-lite'
     },
     plus: {
-        agentModel:'gemini-2.5-pro',
+        agentModel:'gemini-2.5-flash',
         thinkingBudget:-1,
-        vectorDim:784,
+        vectorDim:512,
         flashcardModel:'gemini-2.5-flash'
     }
 }

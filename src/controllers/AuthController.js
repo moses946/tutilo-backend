@@ -58,54 +58,137 @@ export async function handleLogin(req, res){
         
         // Get user reference
         let userRef = db.collection('User').doc(decoded.uid);
-        // Fetch user document and subscription status
+        
+        // Fetch user document first to calculate streak
         let userDoc = await userRef.get();
         let userData = userDoc.data();
-
-        // Streak logic implementation
-        const now = new Date();
-        const lastLogin = userData.lastLogin ? userData.lastLogin.toDate() : null;
-        let streak = userData.streak || 0;
-
+        
+        let currentStreak = userData && userData.streak ? userData.streak : 0;
+        let lastLogin = userData && userData.lastLogin ? userData.lastLogin.toDate() : null;
+        
+        let newStreak = 1; // Default for new users or reset
+        
         if (lastLogin) {
-            const lastLoginDate = new Date(lastLogin);
+            const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            const lastLoginDay = new Date(lastLoginDate.getFullYear(), lastLoginDate.getMonth(), lastLoginDate.getDate());
-
-            const diffTime = today - lastLoginDay;
+            const lastLoginDate = new Date(lastLogin.getFullYear(), lastLogin.getMonth(), lastLogin.getDate());
+            
+            const diffTime = Math.abs(today - lastLoginDate);
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-            if (diffDays === 1) {
-                // User logged in yesterday, continue the streak
-                streak++;
-            } else if (diffDays > 1) {
-                // User missed a day, reset the streak
-                streak = 1;
+            
+            if (diffDays === 0) {
+                // Same day login, maintain streak
+                newStreak = currentStreak;
+            } else if (diffDays === 1) {
+                // Consecutive day login, increment streak
+                newStreak = currentStreak + 1;
+            } else {
+                // Missed a day (or more), reset streak
+                newStreak = 1;
             }
-            // If diffDays is 0, user already logged in today, do nothing to the streak
-        } else {
-            // First login
-            streak = 1;
         }
 
-        // Update user's last login timestamp and streak
         await userRef.update({
             lastLogin: admin.firestore.FieldValue.serverTimestamp(),
-            streak: streak
+            streak: newStreak
         });
-        
+
         let subscription = userData && userData.subscription ? userData.subscription : 'free';
         // check if onboarding is done
         let isOnboardingComplete = userData && userData.isOnboardingComplete?true:false;
+        
+        // Fetch UserProfile to get theme preference
+        let userProfileSnap = await db.collection('UserProfile')
+            .where('userId', '==', userRef)
+            .limit(1)
+            .get();
+        
+        let theme = 'light'; // Default theme
+        if (!userProfileSnap.empty) {
+            const userProfileData = userProfileSnap.docs[0].data();
+            theme = userProfileData?.preferences?.appPreferences?.theme || 'light';
+        }
+        
+        console.log(`User sub:${subscription}, Streak: ${newStreak}, Theme: ${theme}`)
         res.json({
             message: 'Login successful',
             subscription: subscription,
             isOnboardingComplete,
-            streak: streak // Optionally return the new streak to the client
+            streak: newStreak,
+            theme: theme
         });
     }catch(err){
         console.log('Error while logging user in');
         console.log(`ERROR:${err}`);
         res.status(500).json({error:'Error while logging user in'});
+    }
+}
+
+export async function handleUpdateTheme(req, res){
+    try{
+        // decode the token
+        let data = req.body;
+        let authHeader = req.headers.authorization;
+        
+        if(!authHeader){
+            res.status(401).json({error: 'Authorization header required'});
+            return;
+        }
+        
+        let parts = authHeader.split(' ');
+        if(parts.length!==2||parts[0]!=='Bearer'){
+            res.status(401).json({error:'Invalid Authorization'});
+            return;
+        }
+        
+        const token = parts[1];
+        let decoded = await verifyToken(token);
+        if(!decoded){
+            res.status(401).json({error: 'Invalid token'});
+            return;
+        }
+        
+        // Validate theme value
+        const { theme } = data;
+        if(!theme || (theme !== 'light' && theme !== 'dark')){
+            res.status(400).json({error: 'Invalid theme value. Must be "light" or "dark"'});
+            return;
+        }
+        
+        // Get UserProfile for this user
+        let userRef = db.collection('User').doc(decoded.uid);
+        let userProfileSnap = await db.collection('UserProfile')
+            .where('userId', '==', userRef)
+            .limit(1)
+            .get();
+        
+        if (userProfileSnap.empty) {
+            res.status(404).json({error: 'UserProfile not found'});
+            return;
+        }
+        
+        // Update theme preference
+        const userProfileRef = userProfileSnap.docs[0].ref;
+        const currentData = userProfileSnap.docs[0].data();
+        
+        await userProfileRef.update({
+            preferences: {
+                ...currentData.preferences,
+                appPreferences: {
+                    ...currentData.preferences?.appPreferences,
+                    theme: theme
+                }
+            }
+        });
+        
+        console.log(`Updated theme to ${theme} for user ${decoded.uid}`);
+        res.json({
+            message: 'Theme updated successfully',
+            theme: theme
+        });
+    }catch(err){
+        console.log('Error while updating theme');
+        console.log(`ERROR:${err}`);
+        res.status(500).json({error:'Error while updating theme'});
     }
 }

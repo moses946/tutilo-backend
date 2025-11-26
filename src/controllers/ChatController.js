@@ -183,3 +183,45 @@ export async function handleReadMessages(req, res){
     let messagesUser = messages.filter((message)=>message.role!=='system');
     res.json(messagesUser);
 }
+
+export async function handleGetChat(req, res){
+    try {
+        const { chatID } = req.params;
+        const chatRef = db.collection('Chat').doc(chatID);
+        const doc = await chatRef.get();
+        
+        if (!doc.exists) {
+            return res.status(404).json({ error: 'Chat not found' });
+        }
+        
+        res.json({ id: doc.id, ...doc.data() });
+    } catch (err) {
+        console.error("Error fetching chat details:", err);
+        res.status(500).json({ error: 'Failed to fetch chat details' });
+    }
+}
+
+// NEW: Update chat (used for autosaving canvas)
+export async function handleUpdateChat(req, res){
+    try {
+        const { chatID } = req.params;
+        const updates = req.body; // { canvasData: string }
+        
+        const chatRef = db.collection('Chat').doc(chatID);
+        
+        // Only allow updating specific fields to prevent overwriting critical data
+        const safeUpdates = {};
+        if (updates.canvasData !== undefined) safeUpdates.canvasData = updates.canvasData;
+        if (updates.title !== undefined) safeUpdates.title = updates.title;
+        
+        if (Object.keys(safeUpdates).length > 0) {
+            safeUpdates.dateUpdated = admin.firestore.FieldValue.serverTimestamp();
+            await chatRef.update(safeUpdates);
+        }
+        
+        res.status(200).json({ message: 'Chat updated successfully' });
+    } catch (err) {
+        console.error("Error updating chat:", err);
+        res.status(500).json({ error: 'Failed to update chat' });
+    }
+}

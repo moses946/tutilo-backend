@@ -171,7 +171,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
       const chatDoc = await chatRef.get();
       if (chatDoc.exists) {
         const data = chatDoc.data();
-        if (data.title === "default") {
+        if (data.title === "New") {
           const startTime = performance.now();
           let title = await ai.models.generateContent({
             model: 'gemini-2.0-flash',

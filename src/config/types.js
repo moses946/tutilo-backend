@@ -1,6 +1,6 @@
-import {Type } from "@google/genai";
-export const chatNamingPrompt = (chatObj)=>{
-  let chatObjCopy = {...chatObj};
+import { Type } from "@google/genai";
+export const chatNamingPrompt = (chatObj) => {
+  let chatObjCopy = { ...chatObj };
   let template = `
   # ROLE: You are a meticulous Title Generation Agent.
 
@@ -250,6 +250,7 @@ After a tool call, give a text response synthesizing the results
 ## Directive 1: Strictly Ground Your Answers
 - Your highest priority is to base all informational answers **ONLY** on the text provided in <CURRENTLY_RETRIEVED_CHUNKS>.
 - **If the chunks do not contain the answer, you MUST state that.** Do not guess or use general knowledge. A perfect response is: "I couldn't find information about that in the provided study materials."
+- **caveat**:if the chunks do not have the information required but you do know the answer, state the answer but do tell the user that you have no based it on the study materials.
 
 ## Directive 2: Cite Your Sources Impeccably
 - When you use information from a chunk, you **MUST** cite its ID at the end of the relevant sentence.
@@ -356,7 +357,7 @@ Maintain visual balance: center the main topic, offset details symmetrically.
 `;
 };
 
-export const flashcardPrompt = ()=>{
+export const flashcardPrompt = () => {
   let prompt = `You are a helpful study assistant named Tutilo.  
 Your main task is to take in chunks of text from reference material, analyze them, and extract the most important concepts, facts, and definitions that a student would need for quick review. Convert this knowledge into concise, note-focused flashcards in bullet or short sentence form, not Q&A.  
 
@@ -387,11 +388,11 @@ Response Example:
   return prompt
 }
 
-export const promptPrefix = (history, chunks)=>{
+export const promptPrefix = (history, chunks) => {
   let prefix = [{
-    role:'user',
-    parts:[{
-      text:`
+    role: 'user',
+    parts: [{
+      text: `
         # CONTEXT:
           <CONVERSATION_HISTORY>
           ${JSON.stringify(history)}
@@ -401,7 +402,8 @@ export const promptPrefix = (history, chunks)=>{
           ${JSON.stringify(chunks || [])}
           </CURRENTLY_RETRIEVED_CHUNKS>
         `
-  }]}]
+    }]
+  }]
   return prefix
 }
 
@@ -423,3 +425,19 @@ export const videoGenFunctionDeclaration = {
     required: ['className', 'code']
   }
 };
+
+
+export const chatSummarizationPrompt = (existingSummary, newMessages) => {
+  let prompt = `
+    You are an expert summarizer. 
+        Current Summary context: "${existingSummary}"
+        
+        New conversation lines to integrate:
+        ${JSON.stringify(newMessages)}
+        
+        Task: Update the summary to include the key information from the new conversation lines. 
+        Keep it concise, retaining only important facts, definitions, or context needed for future turns.
+        Return ONLY the updated summary text.
+  `
+  return prompt
+}

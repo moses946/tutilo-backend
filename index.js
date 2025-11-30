@@ -8,6 +8,7 @@ import userRouter from './src/routes/UserRoutes.js';
 import chatRouter from './src/routes/ChatRoutes.js';
 import quizRouter from './src/routes/QuizRoutes.js';
 import flashcardsRouter from './src/routes/FlashCardsRoutes.js';
+import analyticsRouter from './src/routes/AnalyticsRoutes.js';
 import cors from 'cors';
 import { authMiddleWare } from './src/middleware/authMiddleWare.js';
 import webhookRouter from './src/routes/Webhooks.js';
@@ -25,13 +26,13 @@ var PORT = process.env.PORT
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({server});
+const wss = new WebSocketServer({ server });
 
 // Schedule a task to run every minute.
-cron.schedule('* * * * *', async() => {
+cron.schedule('* * * * *', async () => {
   console.log('This task runs every minute.');
   let notebookIds = await handleSearchForDeletedNotebooks()
-  if(!notebookIds){
+  if (!notebookIds) {
     console.log('No job for the cronny, womp womp');
     return
   }
@@ -41,46 +42,46 @@ cron.schedule('* * * * *', async() => {
 
 export var clientSocketsMap = new Map();
 // web socket code
-wss.on('connection', async (ws, req)=>{
-    var token;
-    try{
-      // Retrieve the query string and parse token parameter properly
-      // url.parse(req.url, true) yields .query as an object
-      const parsedUrl = url.parse(req.url, true);
-      token = parsedUrl.query && parsedUrl.query.token;
-      if(!token){
-        console.log('No token parameter')
-        ws.close(1002, 'Invalid request')
-        return
-      }
-      
-    }catch(err){
-      console.log(`[ERROR]:${err}`)
+wss.on('connection', async (ws, req) => {
+  var token;
+  try {
+    // Retrieve the query string and parse token parameter properly
+    // url.parse(req.url, true) yields .query as an object
+    const parsedUrl = url.parse(req.url, true);
+    token = parsedUrl.query && parsedUrl.query.token;
+    if (!token) {
+      console.log('No token parameter')
       ws.close(1002, 'Invalid request')
-    }
-    const decoded = await verifyToken(token)
-    if(!decoded){
-      ws.close(1002, 'Unauthorized user')
       return
     }
-    console.log(`Decoded has been successful`)
-    // setting the websocket
-    let socketsSet = clientSocketsMap.get(decoded.uid);
-    if (!socketsSet) {
-      socketsSet = new Set();
-      clientSocketsMap.set(decoded.uid, socketsSet);
-      console.log(`Set the client socket map with key:${decoded.uid}`)
-    }
-    socketsSet.add(ws);
-    ws.on('message', (message)=>{
-        console.log(`Received message:${message.toString()}`);
-    })
-    ws.on('close', ()=>{
-      console.log('client disconnected')
-    })
+
+  } catch (err) {
+    console.log(`[ERROR]:${err}`)
+    ws.close(1002, 'Invalid request')
+  }
+  const decoded = await verifyToken(token)
+  if (!decoded) {
+    ws.close(1002, 'Unauthorized user')
+    return
+  }
+  console.log(`Decoded has been successful`)
+  // setting the websocket
+  let socketsSet = clientSocketsMap.get(decoded.uid);
+  if (!socketsSet) {
+    socketsSet = new Set();
+    clientSocketsMap.set(decoded.uid, socketsSet);
+    console.log(`Set the client socket map with key:${decoded.uid}`)
+  }
+  socketsSet.add(ws);
+  ws.on('message', (message) => {
+    console.log(`Received message:${message.toString()}`);
+  })
+  ws.on('close', () => {
+    console.log('client disconnected')
+  })
 })
 
-app.use(cors({origin:true}));
+app.use(cors({ origin: true }));
 
 // Middleware
 app.use(express.json());
@@ -96,12 +97,12 @@ app.use('/api/v1/users', userRouter);
 app.use('/api/v1/quizzes', quizRouter);
 app.use('/api/v1/flashcards', flashcardsRouter);
 app.use('/api/v1/webhooks', webhookRouter)
-
+app.use('/api/v1/analytics', analyticsRouter);
 
 
 // Basic route
 app.get('/', (req, res) => {
-  res.send('Hello, Express!'); 
+  res.send('Hello, Express!');
 });
 
 // Start server

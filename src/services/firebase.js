@@ -1,9 +1,10 @@
 import admin from 'firebase-admin';
-import serviceAccount from '../secrets/tutilo-service-key.json' with { type: 'json' };
+// import serviceAccount from '../secrets/tutilo-service-key.json' with { type: 'json' };
 
 export const app = admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  storageBucket:'tutilo-c5698.firebasestorage.app'
+  // credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.applicationDefault(),
+  storageBucket:'tutilo-beta.firebasestorage.app'
 });
 
 export default admin;

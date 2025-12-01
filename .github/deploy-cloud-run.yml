@@ -1,0 +1,41 @@
+name: Deploy Backend to Cloud Run
+
+on:
+  push:
+    branches:
+      - beta   # triggers only on beta branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker
+
+      - name: Build Docker image
+        run: |
+          docker build -t gcr.io/${{ secrets.GCP_PROJECT }}/tutilo-backend .
+
+      - name: Push Docker image
+        run: |
+          docker push gcr.io/${{ secrets.GCP_PROJECT }}/tutilo-backend
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy tutilo-backend \
+            --image gcr.io/${{ secrets.GCP_PROJECT }}/tutilo-backend \
+            --platform managed \
+            --region ${{ secrets.GCP_REGION }} \
+            --allow-unauthenticated \
+            --set-env-vars GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}, QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }}, QDRANT_CLUSTER_ENDPOINT=${{ secrets.QDRANT_CLUSTER_ENDPOINT }}, PAYSTACK_TEST_SECRET_KEY=${{ secrets.PAYSTACK_TEST_SECRET_KEY }}, PAYSTACK_SECRET_KEY=${{ secrets.PAYSTACK_SECRET_KEY }}

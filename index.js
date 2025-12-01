@@ -1,6 +1,12 @@
-// feature/optimization
 import express from 'express';
 import dotenv from 'dotenv';
+import cors from 'cors';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import url from 'url';
+import cron from 'node-cron';
+
+// Routes and middleware imports
 import notebookRouter from './src/routes/NotebookRoutes.js';
 import authRouter from './src/routes/AuthRoutes.js';
 import billingRouter from './src/routes/BillingRoutes.js';
@@ -9,85 +15,78 @@ import chatRouter from './src/routes/ChatRoutes.js';
 import quizRouter from './src/routes/QuizRoutes.js';
 import flashcardsRouter from './src/routes/FlashCardsRoutes.js';
 import analyticsRouter from './src/routes/AnalyticsRoutes.js';
-import cors from 'cors';
-import { authMiddleWare } from './src/middleware/authMiddleWare.js';
 import webhookRouter from './src/routes/Webhooks.js';
-import http from "http";
-import { WebSocketServer } from 'ws';
-import url from "url";
+import { authMiddleWare } from './src/middleware/authMiddleWare.js';
 import { verifyToken } from './src/services/firebase.js';
 import { handleMaterialDownload } from './src/controllers/NotebookController.js';
-import cron from 'node-cron';
 import { handleBulkNotebookDeletion, handleSearchForDeletedNotebooks } from './src/utils/utility.js';
 
-
 dotenv.config();
-var PORT = process.env.PORT
+
+const PORT = process.env.PORT || 8080;
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
-// Schedule a task to run every minute.
-cron.schedule('* * * * *', async () => {
-  console.log('This task runs every minute.');
-  let notebookIds = await handleSearchForDeletedNotebooks()
-  if (!notebookIds) {
-    console.log('No job for the cronny, womp womp');
-    return
+// WebSocket setup
+export const clientSocketsMap = new Map();
+const wss = new WebSocketServer({ server });
+wss.on('connection', async (ws, req) => {
+  let token;
+  try {
+    const parsedUrl = url.parse(req.url, true);
+    token = parsedUrl.query?.token;
+    if (!token) throw new Error('No token parameter');
+    const decoded = await verifyToken(token);
+    if (!decoded) throw new Error('Unauthorized user');
+
+    let socketsSet = clientSocketsMap.get(decoded.uid) || new Set();
+    socketsSet.add(ws);
+    clientSocketsMap.set(decoded.uid, socketsSet);
+
+    ws.on('message', (message) => {
+      console.log(`Received message: ${message.toString()}`);
+    });
+    ws.on('close', () => {
+      console.log('Client disconnected');
+      socketsSet.delete(ws);
+    });
+  } catch (err) {
+    console.log(`[WS ERROR]: ${err.message}`);
+    ws.close(1002, 'Invalid request');
   }
-  await handleBulkNotebookDeletion(notebookIds);
-  console.log('cron job has finished')
 });
 
-export var clientSocketsMap = new Map();
-// web socket code
-wss.on('connection', async (ws, req) => {
-  var token;
-  try {
-    // Retrieve the query string and parse token parameter properly
-    // url.parse(req.url, true) yields .query as an object
-    const parsedUrl = url.parse(req.url, true);
-    token = parsedUrl.query && parsedUrl.query.token;
-    if (!token) {
-      console.log('No token parameter')
-      ws.close(1002, 'Invalid request')
-      return
-    }
-
-  } catch (err) {
-    console.log(`[ERROR]:${err}`)
-    ws.close(1002, 'Invalid request')
-  }
-  const decoded = await verifyToken(token)
-  if (!decoded) {
-    ws.close(1002, 'Unauthorized user')
-    return
-  }
-  console.log(`Decoded has been successful`)
-  // setting the websocket
-  let socketsSet = clientSocketsMap.get(decoded.uid);
-  if (!socketsSet) {
-    socketsSet = new Set();
-    clientSocketsMap.set(decoded.uid, socketsSet);
-    console.log(`Set the client socket map with key:${decoded.uid}`)
-  }
-  socketsSet.add(ws);
-  ws.on('message', (message) => {
-    console.log(`Received message:${message.toString()}`);
-  })
-  ws.on('close', () => {
-    console.log('client disconnected')
-  })
-})
-
-app.use(cors({ origin: true }));
-
 // Middleware
+// CORS configuration with allowlist
+const allowedOrigins = [
+  'http://localhost:3000',           // Local development
+  'http://localhost:5173',           // Vite dev server
+  'http://localhost:5174',           // Alternative Vite port
+  'https://tutilo-beta.web.app',     // Production frontend (no trailing slash)
+  // Add more allowed origins here
+];
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or Postman)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true, // If you need to support cookies/auth headers
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
-// Routers
-// Handle multipart/form-data routes before express.json()
+// Routes
 app.get('/api/v1/notebooks/:id/materials/:materialId/download', handleMaterialDownload);
 app.use('/api/v1/notebooks', authMiddleWare, notebookRouter);
 app.use('/api/v1/chats', authMiddleWare, chatRouter);
@@ -96,16 +95,21 @@ app.use('/api/v1/billing', authMiddleWare, billingRouter);
 app.use('/api/v1/users', userRouter);
 app.use('/api/v1/quizzes', quizRouter);
 app.use('/api/v1/flashcards', flashcardsRouter);
-app.use('/api/v1/webhooks', webhookRouter)
-app.use('/api/v1/analytics', analyticsRouter);
-
+app.use('/api/v1/webhooks', webhookRouter);
 
 // Basic route
-app.get('/', (req, res) => {
-  res.send('Hello, Express!');
+app.get('/', (req, res) => res.send('Hello, Express + Cloud Run!'));
+
+// Cron job
+cron.schedule('* * * * *', async () => {
+  console.log('Cron task running...');
+  const notebookIds = await handleSearchForDeletedNotebooks();
+  if (!notebookIds) return;
+  await handleBulkNotebookDeletion(notebookIds);
+  console.log('Cron job finished');
 });
 
-// Start server
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server is running at http://localhost:${PORT}`);
+// Start server (Cloud Run requires listen on process.env.PORT)
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });

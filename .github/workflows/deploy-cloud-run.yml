@@ -25,7 +25,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT }}
-          install_components: docker
+          # install_components: docker
 
       # 4️⃣ Configure Docker to use gcloud as credential helper
       - name: Configure Docker

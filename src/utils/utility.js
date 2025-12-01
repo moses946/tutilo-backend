@@ -270,7 +270,7 @@ export const handleBulkDeleteChat = async (notebookId, chatIds)=>{
 }
 
 export const handleSendToVideoGen = async (data)=>{
-    const response = await fetch('http://172.30.182.137:8000/render', {
+    const response = await fetch('https://video-gen-108839045175.us-east4.run.app/render', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...data.args, userID: data.uid, chatID: data.chatId })

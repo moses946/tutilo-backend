@@ -42,6 +42,6 @@ jobs:
       # 7️⃣ Deploy to Cloud Run using YAML
       - name: Deploy to Cloud Run
         run: |
-          gcloud run services replace cloudrun-service.yml \
+          gcloud run services replace cloudrun-service.yaml \
             --region ${{ secrets.GCP_REGION }} \
             --platform managed

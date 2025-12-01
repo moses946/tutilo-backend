@@ -3,39 +3,45 @@ name: Deploy Backend to Cloud Run
 on:
   push:
     branches:
-      - beta   # triggers only on beta branch
+      - beta  # triggers only on the beta branch
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      # 1️⃣ Checkout the code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
+      # 2️⃣ Authenticate with GCP
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # 3️⃣ Set up gcloud CLI
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT }}
-          service_account_key: ${{ secrets.GCP_SA_KEY }}
-          export_default_credentials: true
+          install_components: docker
 
+      # 4️⃣ Configure Docker to use gcloud as credential helper
       - name: Configure Docker
         run: gcloud auth configure-docker
 
+      # 5️⃣ Build Docker image
       - name: Build Docker image
-        run: |
-          docker build -t gcr.io/${{ secrets.GCP_PROJECT }}/tutilo-backend .
+        run: docker build -t gcr.io/${{ secrets.GCP_PROJECT }}/tutilo-backend .
 
+      # 6️⃣ Push Docker image to Container Registry
       - name: Push Docker image
-        run: |
-          docker push gcr.io/${{ secrets.GCP_PROJECT }}/tutilo-backend
+        run: docker push gcr.io/${{ secrets.GCP_PROJECT }}/tutilo-backend
 
+      # 7️⃣ Deploy to Cloud Run using YAML
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy tutilo-backend \
-            --image gcr.io/${{ secrets.GCP_PROJECT }}/tutilo-backend \
-            --platform managed \
+          gcloud run services replace cloudrun-service.yml \
             --region ${{ secrets.GCP_REGION }} \
-            --allow-unauthenticated \
-            --set-env-vars GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}, QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }}, QDRANT_CLUSTER_ENDPOINT=${{ secrets.QDRANT_CLUSTER_ENDPOINT }}, PAYSTACK_TEST_SECRET_KEY=${{ secrets.PAYSTACK_TEST_SECRET_KEY }}, PAYSTACK_SECRET_KEY=${{ secrets.PAYSTACK_SECRET_KEY }}
+            --platform managed

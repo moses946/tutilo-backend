@@ -7,12 +7,13 @@ export const authMiddleWare = async(req, res, next)=>{
         let parts = authHeader.split(' ');
         if(parts.length!==2||parts[0]!=='Bearer'){
             res.status(401).json({error:'Invalid Authorization'});
+            return;
         }
         const token = parts[1];
         let idToken = await verifyToken(token);
         if(!idToken){
             res.status(401).json({message:'unauthorized'});
-            return
+            return;
         }
         
         // tried to do custom claims, but did not work 

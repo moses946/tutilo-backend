@@ -1,0 +1,28 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: tutilo-backend
+  namespace: tutilo-beta
+spec:
+  template:
+    spec:
+      containers:
+        - image: gcr.io/tutilo-beta/tutilo-backend
+          env:
+            - name: GEMINI_API_KEY
+              value: "AIzaSyACZceFgSUekY3m7MyRXFtDHwnKkskWLVg"
+            - name: QDRANT_API_KEY
+              value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.NljE_vUPsgrtZByuZAo1O8LQVZhcWT7he7BevvjhcQI"
+            - name: QDRANT_CLUSTER_ENDPOINT
+              value: "678894d4-38d7-4dbe-8331-454e557d1353.us-east4-0.gcp.cloud.qdrant.io"
+            - name: PAYSTACK_TEST_SECRET_KEY
+              value: "sk_test_d810930b536136b98eec3235be97570572bcf87b"
+            - name: PAYSTACK_SECRET_KEY
+              value: "sk_test_d810930b536136b98eec3235be97570572bcf87b"
+          ports:
+            - containerPort: 8080
+      containerConcurrency: 80
+      timeoutSeconds: 300
+  traffic:
+    - latestRevision: true
+      percent: 100

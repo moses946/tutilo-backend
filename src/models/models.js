@@ -4,7 +4,7 @@ import { createFlashcardsQuery, createMessageQuery, createQuizQuery } from './qu
 import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
 import { handleBulkChunkRetrieval, handleChunkRetrieval, handleSendToVideoGen } from '../utils/utility.js';
-import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt, promptPrefix, videoGenFunctionDeclaration } from '../config/types.js';
+import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt, promptPrefix, videoGenFunctionDeclaration, chatSummarizationPrompt } from '../config/types.js';
 import { getModelConfig } from '../config/plans.js';
 import { performance } from 'perf_hooks';
 import { userMap } from '../middleware/authMiddleWare.js';
@@ -13,123 +13,155 @@ import { userMap } from '../middleware/authMiddleWare.js';
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
 
-if(!apiKey){
-    throw new Error("Google GenAI API key not set. Define GOOGLE_API_KEY or GEMINI_API_KEY in your environment (.env).");
+if (!apiKey) {
+  throw new Error("Google GenAI API key not set. Define GOOGLE_API_KEY or GEMINI_API_KEY in your environment (.env).");
 }
 
 export const ai = new GoogleGenAI({
-    apiKey
+  apiKey
 });
 
 
 
 // handle concept map generation 
-export const handleConceptMapGeneration = async (chunkRefs, chunks)=>{
-    // Build a single string with all chunks in the format:
-    // <chunkID>
-    // chunk text
-    // (separated by two newlines)
-    const texts = chunkRefs.map((ref, idx) => `<chunkID: ${ref.id}>\n[${chunks[idx].text}]`).join('\n');
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: texts,
-        config:{
-            systemInstruction:conceptMapPrompt,
-            responseMimeType:'application/json',
-            responseSchema:{
-                type: Type.OBJECT,
-                properties: {
-                  summary: {
-                    type: Type.STRING,
-                  },
-                  graph: {
-                    type: Type.OBJECT,
-                    properties: {
-                      nodes: {
-                        type: Type.ARRAY,
-                        items: {
-                          type: Type.OBJECT,
-                          properties: {
-                            id: { type: Type.STRING },
-                            data: {
-                              type: Type.OBJECT,
-                              properties: {
-                                label: { type: Type.STRING },
-                                chunkIds: {
-                                  type: Type.ARRAY,
-                                  items: { type: Type.STRING },
-                                },
-                              },
-                              required: ["label", "chunkIds"],
-                            },
-                          },
-                          required: ["id", "data"],
-                        },
-                      },
-                      edges: {
-                        type: Type.ARRAY,
-                        items: {
-                          type: Type.OBJECT,
-                          properties: {
-                            id: { type: Type.STRING },
-                            source: { type: Type.STRING },
-                            target: { type: Type.STRING },
-                          },
-                          required: ["id", "source", "target"],
-                        },
-                      },
-                    },
-                    required: ["nodes", "edges"],
-                  },
-                },
-                required: ["summary", "graph"],
-              }
-        }
-    });
-    return response.text
-}
-
-export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, flashcardModel)=>{
-    const texts = chunkRefs.map((ref, idx) => `<chunkID: ${ref.id}>\n[${chunks[idx].text}]`).join('\n');
-    const response = await ai.models.generateContent({
-        model: flashcardModel,
-        systemInstruction: flashcardPrompt(),
-        contents: texts,
-        config: {
-        thinkingConfig:{
-          thinkingBudget:0
-        },
-        responseMimeType: 'application/json',
-        responseSchema: {
+export const handleConceptMapGeneration = async (chunkRefs, chunks) => {
+  // Build a single string with all chunks in the format:
+  // <chunkID>
+  // chunk text
+  // (separated by two newlines)
+  const texts = chunkRefs.map((ref, idx) => `<chunkID: ${ref.id}>\n[${chunks[idx].text}]`).join('\n');
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: texts,
+    config: {
+      systemInstruction: conceptMapPrompt,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          summary: {
+            type: Type.STRING,
+          },
+          graph: {
             type: Type.OBJECT,
             properties: {
-                numberOfCards: { type: Type.NUMBER },
-                flashcards: { 
-                  type: Type.ARRAY, 
-                  // minItems: 5, 
-                  maxItems: 20 ,
-                  items: { type: Type.STRING } },
+              nodes: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    data: {
+                      type: Type.OBJECT,
+                      properties: {
+                        label: { type: Type.STRING },
+                        chunkIds: {
+                          type: Type.ARRAY,
+                          items: { type: Type.STRING },
+                        },
+                      },
+                      required: ["label", "chunkIds"],
+                    },
+                  },
+                  required: ["id", "data"],
+                },
+              },
+              edges: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    source: { type: Type.STRING },
+                    target: { type: Type.STRING },
+                  },
+                  required: ["id", "source", "target"],
+                },
+              },
             },
+            required: ["nodes", "edges"],
+          },
         },
-        propertyOrdering: ["numberOfCards", "flashcards"],
-    }});    
-    try {
-        const responseData = JSON.parse(response.text);        
-        if (responseData.flashcards && responseData.flashcards.length > 0 && notebookRef) {
-            // Store flashcards in Firestore
-            const flashcardRefs = await createFlashcardsQuery(responseData.flashcards, notebookRef);
-            return flashcardRefs;
-        } else {
-            return [];
-        }
-    } catch (error) {
-        console.error('Error parsing flashcard response or storing in database:', error);
-        return [];
+        required: ["summary", "graph"],
+      }
     }
+  });
+  return response.text
 }
 
+export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, flashcardModel) => {
+  const texts = chunkRefs.map((ref, idx) => `<chunkID: ${ref.id}>\n[${chunks[idx].text}]`).join('\n');
+  const response = await ai.models.generateContent({
+    model: flashcardModel,
+    systemInstruction: flashcardPrompt(),
+    contents: texts,
+    config: {
+      thinkingConfig: {
+        thinkingBudget: 0
+      },
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          numberOfCards: { type: Type.NUMBER },
+          flashcards: {
+            type: Type.ARRAY,
+            // minItems: 5, 
+            maxItems: 20,
+            items: { type: Type.STRING }
+          },
+        },
+      },
+      propertyOrdering: ["numberOfCards", "flashcards"],
+    }
+  });
+  try {
+    const responseData = JSON.parse(response.text);
+    if (responseData.flashcards && responseData.flashcards.length > 0 && notebookRef) {
+      // Store flashcards in Firestore
+      const flashcardRefs = await createFlashcardsQuery(responseData.flashcards, notebookRef);
+      return flashcardRefs;
+    } else {
+      return [];
+    }
+  } catch (error) {
+    console.error('Error parsing flashcard response or storing in database:', error);
+    return [];
+  }
+}
+
+export const handleChatSummarization = async (existingSummary, messagesToSummarize) => {
+  try {
+    const conversationText = messagesToSummarize.map(m =>
+      `${m.role.toUpperCase()}: ${m.parts[0].text}`
+    ).join('\n');
+
+    const prompt = chatSummarizationPrompt(existingSummary, conversationText);
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-lite',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.STRING
+        },
+        thinkingConfig: {
+          thinkingBudget: 0
+        }
+      }
+    });
+
+    return response.text;
+  } catch (error) {
+    console.error('Error summarizing chat:', error);
+    return existingSummary;
+  }
+}
+
+
 export const handleRunAgent = async (req, data, chatObj, chatRef) => {
-  try{
+  try {
     let plan = req.user.subscription;
     var modelLimits = getModelConfig(plan);
     let history = chatObj.history.slice(0, chatObj.history.length - 1);
@@ -139,7 +171,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
       const chatDoc = await chatRef.get();
       if (chatDoc.exists) {
         const data = chatDoc.data();
-        if (data.title === "default") {
+        if (data.title === "New") {
           const startTime = performance.now();
           let title = await ai.models.generateContent({
             model: 'gemini-2.0-flash',
@@ -180,8 +212,8 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
       model: 'gemini-2.5-flash-lite',
       contents: intentCompleteMessage.concat(message),
       config: {
-        thinkingConfig:{
-          thinkingBudget:0
+        thinkingConfig: {
+          thinkingBudget: 0
         },
         systemInstruction: intentPrompt(summary),
         responseMimeType: 'application/json',
@@ -239,7 +271,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
         limit: 5,
         with_payload: true,
       });
-      
+
       let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
       let chunkPaths = qdrantResults.map((result) => (`${chunkBasePath}${result.payload.chunkID}.json`));
       // OPTIMIZATION: Fetch Chunk Metadata from Firestore in parallel with Storage retrieval
@@ -248,32 +280,32 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
       let [chunks, chunkDocs] = await Promise.all([
         handleBulkChunkRetrieval(chunkPaths),
         db.getAll(...chunkDocRefs) // Batch fetch from Firestore
-     ]);
-     chunks.forEach((chunkText, index) => {
-      const chunkId = qdrantResults[index]?.payload?.chunkID;
-      const chunkDoc = chunkDocs[index];
-      
-      if (chunkId && chunkDoc.exists) {
+      ]);
+      chunks.forEach((chunkText, index) => {
+        const chunkId = qdrantResults[index]?.payload?.chunkID;
+        const chunkDoc = chunkDocs[index];
+
+        if (chunkId && chunkDoc.exists) {
           const docData = chunkDoc.data();
           const text = typeof chunkText === 'string' ? chunkText : JSON.stringify(chunkText);
           chatObj.chunks[chunkId] = text.slice(0, 500);
-          
+
           // Populate metadata for frontend
           chunkMetadata[chunkId] = {
-              chunkId: chunkId,
-              pageNumber: docData.pageNumber,
-              materialId: docData.materialID.id, // Assuming reference
-              tokenCount: docData.tokenCount
+            chunkId: chunkId,
+            pageNumber: docData.pageNumber,
+            materialId: docData.materialID.id, // Assuming reference
+            tokenCount: docData.tokenCount
           };
-      }
+        }
       });
     }
 
-    var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)    
-    
+    var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)
+
     // Return metadata combined with message
     return { ...agentResponse, chunkMetadata };
-  }catch(err){
+  } catch (err) {
     console.log(`[ERROR]: handleAgent:${err}`);
     throw Error(err);
   }
@@ -375,7 +407,7 @@ RULES:
  * }
  */
 
-export async function agentLoop(userId, chatObj, chatRef, message=[]){
+export async function agentLoop(userId, chatObj, chatRef, message = []) {
   /**
    * This function should handle running the agent, Takes the chat history and runs inference
    */
@@ -383,11 +415,11 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
   var plan = userObj.plan;
   var modelLimits = getModelConfig(plan);
   let prompt = agentPrompt(userObj);
-  let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length-1), chatObj.chunks);
+  let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length - 1), chatObj.chunks);
   var agentResponse;
   var isMedia = false;
   var aiMessageRef;
-  while (true){
+  while (true) {
     agentResponse = await ai.models.generateContent({
       model: modelLimits.agentModel,
       contents: completeMessage.concat(message),
@@ -402,13 +434,13 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
           }
         ]
       }
-    }); 
+    });
     if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
       const functionCall = agentResponse.functionCalls[0];
       var functionResponsePart;
-      if(functionCall.name=='video_gen'){
+      if (functionCall.name == 'video_gen') {
         try {
-          if(plan=='free'){
+          if (plan == 'free') {
             functionResponsePart = {
               name: functionCall.name,
               response: {
@@ -431,12 +463,12 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
                 },
               ],
             },)
-           await createMessageQuery({content:functionResponsePart, role:'system', chatRef})
-           continue
+            await createMessageQuery({ content: functionResponsePart, role: 'system', chatRef })
+            continue
 
           }
-          let data = {args:functionCall.args, uid:userId,  chatId:chatRef.id}
-          const response = await handleSendToVideoGen(data);  
+          let data = { args: functionCall.args, uid: userId, chatId: chatRef.id }
+          const response = await handleSendToVideoGen(data);
           if (!response.ok) {
             functionResponsePart = {
               name: functionCall.name,
@@ -458,7 +490,7 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
           };
           console.error("Failed to send function call to video gen server:", err);
         }
-     
+
       }
       chatObj.history.push({
         role: "model",
@@ -468,11 +500,11 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
           },
         ],
       });
-      await createMessageQuery({content:functionCall, role:'model', chatRef})
+      await createMessageQuery({ content: functionCall, role: 'model', chatRef })
       let messagefunc = [
         agentResponse.candidates[0].content
       ]
-      if(functionResponsePart){
+      if (functionResponsePart) {
         chatObj.history.push({
           role: "system",
           parts: [
@@ -489,20 +521,20 @@ export async function agentLoop(userId, chatObj, chatRef, message=[]){
             },
           ],
         },)
-       await createMessageQuery({content:functionResponsePart, role:'system', chatRef})
-      }else{
+        await createMessageQuery({ content: functionResponsePart, role: 'system', chatRef })
+      } else {
         break;
       }
-     
+
       message.push(...messagefunc);
 
 
-    }else{
+    } else {
       chatObj.history.push({ role: "model", parts: [{ text: agentResponse.text }] });
-      aiMessageRef = await createMessageQuery({content:[{text:agentResponse.text}], role:'model', chatRef})
+      aiMessageRef = await createMessageQuery({ content: [{ text: agentResponse.text }], role: 'model', chatRef })
       break;
     }
   }
-  return { message: !isMedia?agentResponse.text:'Your video is being created, ready in a bit', media: isMedia, messageRef:aiMessageRef};
+  return { message: !isMedia ? agentResponse.text : 'Your video is being created, ready in a bit', media: isMedia, messageRef: aiMessageRef };
 
 }

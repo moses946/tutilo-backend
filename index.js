@@ -96,6 +96,7 @@ app.use('/api/v1/users', userRouter);
 app.use('/api/v1/quizzes', quizRouter);
 app.use('/api/v1/flashcards', flashcardsRouter);
 app.use('/api/v1/webhooks', webhookRouter);
+app.use('/api/v1/analytics', analyticsRouter);
 
 // Basic route
 app.get('/', (req, res) => res.send('Hello, Express + Cloud Run!'));

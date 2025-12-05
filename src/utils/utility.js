@@ -1,5 +1,5 @@
 import multer from 'multer';
-import {bucket, db} from '../services/firebase.js';
+import admin, {bucket, db} from '../services/firebase.js';
 import {ai} from '../models/models.js'
 import qdrantClient from '../services/qdrant.js'
 import {v4} from 'uuid'
@@ -251,6 +251,82 @@ export const handleSearchForDeletedNotebooks = async ()=>{
 
 }
 
+export const handleSearchForDeletedUsers = async () => {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    
+    // OPTIMIZATION: Added .limit(200)
+    // It is better to process 200 users every minute successfully 
+    // than try to process 5000 and crash.
+    const userSnaps = await db
+        .collection('User')
+        .where('isDeleted', '==', true)
+        .where('deletedAt', '<=', oneDayAgo)
+        .limit(200) 
+        .get();
+
+    return userSnaps.docs.map(doc => doc.id);
+};
+
+export const handleDeleteUser = async (userId) => {
+    // Use a batch to delete user and profile efficiently
+    const batch = db.batch();
+    const userRef = db.collection('User').doc(userId);
+    const userProfileRef = db.collection('UserProfile').doc(userId);
+    batch.delete(userRef);
+    batch.delete(userProfileRef);
+    // Promise is returned directly for better chaining/awaiting
+    return batch.commit();
+};
+
+export const handleBulkDeleteUsers = async (userIds = []) => {
+    if (!userIds.length) return;
+
+    // OPTIMIZATION: Create one batch for all users
+    // Note: If userIds.length > 250, you must chunk this loop 
+    // because Firestore allows max 500 ops per batch (250 users * 2 ops = 500).
+    // Assuming the search limit is 200, this is safe.
+    
+    const batch = db.batch();
+
+    userIds.forEach(userId => {
+        const userRef = db.collection('User').doc(userId);
+        const userProfileRef = db.collection('UserProfile').doc(userId);
+
+        batch.delete(userRef);
+        batch.delete(userProfileRef);
+    });
+
+    // One single network request to delete everyone
+    await batch.commit();
+};
+
+// Helper to chunk arrays
+const chunkArray = (arr, size) => 
+    Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
+      arr.slice(i * size, i * size + size)
+);
+  
+export const handleBulkNotebookIdRetrieval = async (userIds = []) => {
+    if (!userIds.length) return [];
+
+    // 1. Chunk userIds into groups of 10 (Firestore 'IN' query limit)
+    const chunks = chunkArray(userIds, 10);
+
+    const retrievalPromises = chunks.map(chunk => {
+        // Convert string IDs to Document References because your original code
+        // compared 'userID' == db.collection('User').doc(userId)
+        const userRefs = chunk.map(id => db.collection('User').doc(id));
+
+        return db.collection('Notebook')
+            .where('userID', 'in', userRefs) // OPTIMIZATION: One query for 10 users
+            .get();
+    });
+
+    const snaps = await Promise.all(retrievalPromises);
+    
+    // Flatten results
+    return snaps.flatMap(snap => snap.docs.map(doc => doc.id));
+};
 export const handleDeleteChat = async (notebookId, chatId)=>{
      // delete chat related stuff on db
      await deleteChatQuery(chatId);

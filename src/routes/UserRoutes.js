@@ -1,11 +1,12 @@
 import express from 'express';
-import { handleUpdateUser } from '../controllers/UserController.js'; // Import the new function
+import { handleDeleteUser, handleUpdateUser } from '../controllers/UserController.js'; // Import the new function
 import { handleUpdateTheme } from '../controllers/AuthController.js';
 
 const userRouter = express.Router();
 
 userRouter.get('/', (req, res)=>{});
 userRouter.get('/:userId', (req, res)=>{});
+userRouter.delete('/:userId', handleDeleteUser);
 
 // ADD THIS ROUTE
 userRouter.patch('/:userId', handleUpdateUser);

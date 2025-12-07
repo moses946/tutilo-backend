@@ -2,9 +2,45 @@ import { getModelConfig, planLimits } from "../config/plans.js";
 import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGeneration } from "../models/models.js";
 import { createChunksQuery, createConceptMapQuery, createMaterialQuery, createNotebookQuery, deleteNotebookQuery, readNotebooksQuery, removeMaterialFromNotebook, updateChunksWithQdrantIds, updateMaterialWithChunks, updateNotebookWithFlashcards, updateNotebookWithMaterials } from "../models/query.js";
 import admin, { bucket, db } from "../services/firebase.js";
-import qdrantClient from "../services/qdrant.js";
+import { convertImageToPdf, convertTextToPdf } from "../utils/pdfConverter.js";
 import extractPdfText from "../utils/chunking.js";
 import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, handleChunkEmbeddingAndStorage } from "../utils/utility.js";
+import extractContent from "../utils/chunking.js";
+
+
+const preprocessFileForPdf = async (file) => {
+    // 1. Always extract content first (using original buffer) to get text for RAG
+    const chunks = await extractContent(file);
+    
+    // Combine chunks to get full text for PDF generation if needed
+    const fullText = chunks.map(c => c.text).join('\n\n');
+
+    // 2. Convert to PDF if necessary
+    let pdfBuffer;
+    let newFilename = file.originalname;
+    let newMimetype = 'application/pdf';
+
+    if (file.mimetype === 'application/pdf') {
+        pdfBuffer = file.buffer; // No conversion needed
+    } else if (file.mimetype.startsWith('image/')) {
+        // Use the original image buffer for visual PDF (so user sees the image)
+        pdfBuffer = await convertImageToPdf(file.buffer, file.mimetype);
+        newFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
+    } else {
+        // For Docx, PPTX, Txt, Epub - use extracted text to generate a clean PDF
+        pdfBuffer = await convertTextToPdf(fullText);
+        newFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
+    }
+
+    // 3. Return the chunks (for Embedding) and the NEW buffer/name (for Storage/Viewing)
+    return {
+        chunks, // Extracted text data
+        originalFile: file, // Keep metadata
+        pdfBuffer, // The buffer to upload to storage
+        newFilename,
+        newMimetype
+    };
+};
 
 export async function handleNotebookCreation(req, res){
     const { uid, subscription } = req.user;
@@ -36,22 +72,38 @@ export async function handleNotebookCreation(req, res){
     const files = req.files;
     
     try {
+        // 1. Pre-process files (Extraction + Conversion to PDF)
+        const processedFiles = [];
+        for (const file of files) {
+            processedFiles.push(await preprocessFileForPdf(file));
+        }
         // Step 1: Create a new notebook reference in Firestore
-        let notebookRef = await createNotebookQuery(data);        
+        let notebookRef = await createNotebookQuery(data);  
+        
+        const filesToUpload = processedFiles.map(pf => ({
+            ...pf.originalFile,
+            originalname: pf.newFilename, // Save as .pdf
+            mimetype: pf.newMimetype,
+            buffer: pf.pdfBuffer // Use generated PDF
+        }));      
         // Step 2: Upload original files to storage
         const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
-        const uploaded = await handleBulkFileUpload(files, noteBookBasePath);        
-        // Step 3: Create material documents in Firestore and get references
-        const materialRefs = await createMaterialQuery(notebookRef, files);
-       // Step 4: Process each file into chunks and create chunk documents
+        // Upload the PDFs to storage
+        const uploaded = await handleBulkFileUpload(filesToUpload, noteBookBasePath);
+
+        // Create material documents
+        const materialRefs = await createMaterialQuery(notebookRef, filesToUpload);
+
         const materialChunkMappings = [];
         let chunkRefsCombined = [];
         let chunksCombined = [];
-        for(let i = 0; i < files.length; i++) {
-            const file = files[i];
+
+        for (let i = 0; i < processedFiles.length; i++) {
+            const proc = processedFiles[i];
             const materialRef = materialRefs[i];
-            // Extract chunks from the file
-            const chunks = await extractPdfText(file.buffer);            
+            
+            // Use the extracted chunks from the preprocessing step
+            const chunks = proc.chunks;           
             // Create chunk documents in Firestore
             const chunkRefs = await createChunksQuery(chunks, materialRef);
             chunkRefsCombined.push(...chunkRefs)
@@ -73,7 +125,7 @@ export async function handleNotebookCreation(req, res){
             await updateMaterialWithChunks(materialRef, chunkRefs);            
             materialChunkMappings.push({
                 materialId: materialRef.id,
-                materialName: file.originalname || file.name,
+                materialName: proc.newFilename, 
                 chunkCount: chunks.length,
                 chunkRefs: chunkRefs,
                 qdrantPointIds: qdrantPointIds
@@ -128,46 +180,6 @@ export async function handleNotebookCreation(req, res){
 }
 
 
-
-
-/**
- * Processes a single material file: extracts text, creates chunks,
- * generates embeddings, and updates Firestore documents.
- * This function is designed to be run in parallel for each file.
- */
-async function processMaterial(file, materialRef, notebookRef, vectorDim) {
-    // Extract chunks from the file
-    const chunks = await extractPdfText(file.buffer);
-    // Create chunk documents in Firestore
-    const chunkRefs = await createChunksQuery(chunks, materialRef);
-    // Create embeddings and store in Qdrant (can run in parallel with chunk upload)
-    const [qdrantPointIds, ] = await Promise.all([
-        handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookRef.id, vectorDim),
-        // Upload chunk content to storage (optional, can run in parallel)
-        (async () => {
-            const chunkBasePath = `notebooks/${notebookRef.id}/chunks`;
-            const chunkItems = chunks.map((chunk, index) => ({ ...chunk,
-                name: chunkRefs[index].id
-            }));
-            await handleBulkChunkUpload(chunkItems, chunkBasePath);
-        })(),
-    ]);
-    // Update chunk documents with Qdrant IDs and update the material with chunk references
-    await Promise.all([
-        updateChunksWithQdrantIds(chunkRefs, qdrantPointIds),
-        updateMaterialWithChunks(materialRef, chunkRefs),
-    ]);
-    // Return the mapping for the final response
-    return {
-        materialId: materialRef.id,
-        materialName: file.originalname || file.name,
-        chunkCount: chunks.length,
-        chunkRefs,
-        chunks,
-        qdrantPointIds,
-    };
-}
-
 export async function handleNotebookDeletion(req, res){
     const {id} = req.params;
     try{
@@ -181,21 +193,6 @@ export async function handleNotebookDeletion(req, res){
     }
 }
 
-// export async function handleNotebookDeletion(req, res){
-//     const {id} = req.params;
-//     try{
-//         await deleteNotebookQuery(id);
-//         await bucket.deleteFiles({prefix:`notebooks/${id}/`});
-//         await bucket.deleteFiles({prefix:`videos/${id}/`})
-//         // delete the qdrant collection
-//         await qdrantClient.deleteCollection(id);
-//         //await bucket.deleteFiles({ prefix: `notebooks/${id}/` });
-//         res.status(200).json({message: 'Notebook deleted successfully'});
-//     }catch(err){
-//         console.error('Notebook deletion failed:', err);
-//         res.status(500).json({error: 'Notebook deletion failed'});
-//     }
-// }
 
 export async function handleNotebookUpdate(req, res) {
     try {
@@ -218,14 +215,25 @@ export async function handleNotebookUpdate(req, res) {
 
         // Handle new file additions
         if (files.length > 0) {
+            const processedFiles = [];
+             for (const file of files) {
+                 processedFiles.push(await preprocessFileForPdf(file));
+             }
+ 
+             const filesToUpload = processedFiles.map(pf => ({
+                 ...pf.originalFile,
+                 originalname: pf.newFilename,
+                 mimetype: pf.newMimetype,
+                 buffer: pf.pdfBuffer
+             }));
             const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
             await handleBulkFileUpload(files, noteBookBasePath);
-            const materialRefs = await createMaterialQuery(notebookRef, files);
+            const materialRefs = await createMaterialQuery(notebookRef, filesToUpload);
             let newChunkRefsCombined = [];
             let newChunksCombined = [];
             
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
+            for (let i = 0; i < filesToUpload.length; i++) {
+                const file = filesToUpload[i];
                 const materialRef = materialRefs[i];
                 
                 const chunks = await extractPdfText(file.buffer);

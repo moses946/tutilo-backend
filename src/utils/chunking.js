@@ -1,6 +1,10 @@
 import pdfParse from "pdf-parse";
 import crypto from "crypto";
-
+import mammoth from "mammoth";
+import officeParser from "officeparser";
+import EPub from "epub2";
+import mime from "mime-types";
+import { ai } from "../models/models.js";
 // Configuration constants
 const CACHE_SIZE = 5;
 const PAGE_SPLIT = '\f';
@@ -187,152 +191,124 @@ async function extractPdfText(file) {
   return processedPages;
 }
 
-export default extractPdfText;
-// import pdfParse from "pdf-parse";
-// import crypto from "crypto";
+async function extractDocxText(buffer) {
+  const result = await mammoth.extractRawText({ buffer });
+  return simulatePagination(result.value);
+}
 
-// // Lightweight in-memory LRU cache to avoid reparsing the same PDF
-// const CACHE_SIZE = 5;
-// const cache = new Map(); // key -> pagesWithNumbers
+async function extractPptxText(buffer) {
+  // officeparser works with file paths or buffers
+  const text = await officeParser.parseOfficeAsync(buffer);
+  return simulatePagination(text);
+}
 
-// function getCache(key){
-//     if(!cache.has(key)) return undefined;
-//     const value = cache.get(key);
-//     // refresh recency
-//     cache.delete(key);
-//     cache.set(key, value);
-//     return value;
-// }
+async function extractTxtText(buffer) {
+  const text = buffer.toString('utf-8');
+  return simulatePagination(text);
+}
 
-// function setCache(key, value){
-//     cache.set(key, value);
-//     if(cache.size > CACHE_SIZE){
-//         const oldestKey = cache.keys().next().value;
-//         cache.delete(oldestKey);
-//     }
-// }
+async function extractEpubText(buffer) {
+  return new Promise((resolve, reject) => {
+    // Note: epub2 usually expects a file path. 
+    // For robust buffer handling, saving to tmp might be required, 
+    // but here we try officeParser as a fallback for generic parsing if epub2 fails on buffer.
+    officeParser.parseOfficeAsync(buffer)
+      .then(text => resolve(simulatePagination(text)))
+      .catch(err => {
+        console.error("EPUB extraction failed", err);
+        resolve([{ pageNumber: 1, text: "EPUB content could not be parsed.", tokenCount: 0 }]);
+      });
+  });
+}
 
-// async function extractPdfText(file){
-//     // file is expected to be a Buffer or Uint8Array
-//     const buffer = Buffer.isBuffer(file) ? file : Buffer.from(file);
-//     const key = crypto.createHash('sha1').update(buffer).digest('hex');
-//     const cached = getCache(key);
-//     if(cached) return cached;
+async function extractImageText(buffer, mimeType) {
+  if (!ai) throw new Error("Gemini API key not configured for image transcription.");
+
+  const imagePart = {
+    inlineData: {
+      data: buffer.toString("base64"),
+      mimeType: mimeType
+    },
+  };
+
+  const prompt = "Transcribe all text visible in this image accurately. If there are diagrams or charts, provide a brief descriptive summary of them in brackets [].";
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-lite", // Using fast model as requested
+      contents: [{ role: 'user', parts: [{ text: prompt }, imagePart] }], 
+      config: {
+        thinkingConfig: { thinkingBudget: 0 }
+      }
+    });
     
-//     // Use pagerender to control per-page text, append a unique delimiter we can split on
-//     const PAGE_SPLIT = '\f';
-    
-//     const renderPage = (pageData) => {
-//         return pageData.getTextContent().then((textContent) => {
-//             const items = textContent.items || [];
-//             // Preserve line breaks and avoid inserting spaces inside formulas.
-//             const text = items.map((item, i, arr) => {
-//                 const curr = item.str || '';
-//                 const prev = i > 0 ? (arr[i - 1].str || '') : '';
-//                 const prevAlphaNum = /[A-Za-z0-9]$/.test(prev);
-//                 const currAlphaNum = /^[A-Za-z0-9]/.test(curr);
-//                 const needsSpace = prevAlphaNum && currAlphaNum;
-//                 const sep = item.hasEOL ? '\n' : (needsSpace ? ' ' : '');
-//                 return (sep ? sep : '') + curr;
-//             }).join('');
-//             return text + PAGE_SPLIT; // mark end of page
-//         });
-//     };    
-    
-//     const result = await pdfParse(buffer, { pagerender: renderPage });
-//     const raw = result.text || '';
-    
-//     // Split on our delimiter; keep empty pages to maintain 1-based page numbers
-//     let pages = raw.split(PAGE_SPLIT);
-    
-//     // Map to objects with 1-based page numbers
-//     const pagesWithNumbers = pages.map((text, index) => {
-//         const cleaned = (text || '').trim();
-//         // Estimate token count using rule: 100 tokens ≈ 60-80 words.
-//         // Use midpoint 70 words ≈ 100 tokens => tokens ≈ words * (100/70).
-//         const wordCount = cleaned.length > 0 ? cleaned.split(/\s+/).filter(Boolean).length : 0;
-//         const tokenCount = Math.round(wordCount * (100 / 70));
-//         return { pageNumber: index + 1, text: cleaned, tokenCount };
-//     });
-    
-//     // Filter out blank pages entirely
-//     let nonBlankPages = pagesWithNumbers.filter(p => p.text && p.text.length > 0);
+    // Based on your models.js usage:
+    return [{ pageNumber: 1, text: response.text || "", tokenCount: estimateTokens(response.text || "") }];
+  } catch (err) {
+    console.error("Image transcription failed:", err);
+    return [{ pageNumber: 1, text: "[Image transcription failed]", tokenCount: 0 }];
+  }
+}
 
-//     // Enhanced heuristic filter that preserves mathematical content
-//     const isNoisyPage = (text) => {
-//         const len = text.length;
-//         if (len < 10) return true; // extremely short pages
-        
-//         // Check if page likely contains mathematical content
-//         const hasMathIndicators = (text) => {
-//             // Common mathematical terms and patterns
-//             const mathPatterns = [
-//                 /equation/i,
-//                 /theorem/i,
-//                 /proof/i,
-//                 /lemma/i,
-//                 /corollary/i,
-//                 /definition/i,
-//                 /formula/i,
-//                 /\d+\s*[+\-*/×÷]\s*\d+/, // Basic arithmetic
-//                 /[a-zA-Z]\s*=\s*/, // Variable assignments
-//                 /\([^)]*[+\-*/=][^)]*\)/, // Expressions in parentheses
-//                 /\b(sin|cos|tan|log|ln|exp|sqrt|lim|sum|int)\b/i, // Math functions
-//                 /[∑∫∏∂∇∆√∞∈∉⊂⊃∪∩]/,  // Mathematical symbols
-//                 /[αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ]/, // Greek letters
-//                 /\^|_\{|_\d/, // Superscript/subscript indicators
-//                 /\\[a-zA-Z]+/, // LaTeX commands
-//             ];
-            
-//             return mathPatterns.some(pattern => pattern.test(text));
-//         };
-        
-//         // If the page contains mathematical content, be more lenient
-//         const isMathContent = hasMathIndicators(text);
-        
-//         // Extended allowed characters including more mathematical symbols
-//         const allowed = /[A-Za-z0-9\s.,;:()'/±×÷=+\-*^_{}\[\]<>∞≈≠≤≥αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ∑∫∏∂∇∆√∈∉⊂⊃∪∩∀∃∄∅∧∨¬⊕⊗⊥∥∠°′″‴∝∼≅≡≢≪≫⊆⊇⊊⊋∖℘ℕℤℚℝℂ∂∇·×∘∙⊙⊖⊕⊗⊘⊚⊛⊜⊝⊞⊟⊠⊡⟨⟩⟦⟧‖|!@#$%&]/;
-        
-//         let nonAlnum = 0;
-//         for (let i = 0; i < len; i++) {
-//             if (!allowed.test(text[i])) nonAlnum++;
-//         }
-//         const nonAlnumRatio = nonAlnum / len;
-        
-//         // Adjust threshold based on content type
-//         const symbolThreshold = isMathContent ? 0.6 : 0.4; // More lenient for math pages
-//         if (nonAlnumRatio > symbolThreshold) return true;
-        
-//         // Skip TOC detection if this looks like mathematical content
-//         if (isMathContent) {
-//             return false; // Don't filter out mathematical pages
-//         }
-        
-//         // Original TOC detection logic (only for non-math pages)
-//         // Dot leader patterns typical of TOCs
-//         const dotLeaders = (text.match(/\.{3,}/g) || []).length;
-//         if (dotLeaders >= 5) return true; // Increased threshold
-        
-//         // Many lines that end with a number (chapter ..... 23)
-//         const lines = text.split(/\r?\n/);
-//         const leaderOrNumLines = lines.reduce((acc, line) => {
-//             return acc + ((/\.{2,}/.test(line) && /\d+$/.test(line.trim())) ? 1 : 0);
-//         }, 0);
-//         if (leaderOrNumLines >= 5) return true; // Increased threshold
-        
-//         // TOC keywords - only filter if there are strong indicators
-//         const lower = text.toLowerCase();
-//         const hasTocKeyword = lower.includes('table of contents') || 
-//                               (lower.includes('contents') && dotLeaders >= 2) ||
-//                               (lower.includes('index') && dotLeaders >= 2);
-//         if (hasTocKeyword && (dotLeaders >= 2 || leaderOrNumLines >= 2)) return true;
-        
-//         return false;
-//     };
+// Helper to simulate paging for non-paginated formats
+function simulatePagination(fullText) {
+  if (!fullText) return [];
+  const words = fullText.split(/\s+/);
+  const wordsPerPage = 500;
+  const pages = [];
 
-//     const filteredPages = nonBlankPages.filter(p => !isNoisyPage(p.text));
+  for (let i = 0; i < words.length; i += wordsPerPage) {
+    const pageText = words.slice(i, i + wordsPerPage).join(' ');
+    pages.push({
+      pageNumber: Math.floor(i / wordsPerPage) + 1,
+      text: pageText,
+      tokenCount: estimateTokens(pageText)
+    });
+  }
+  return pages.length > 0 ? pages : [{ pageNumber: 1, text: fullText, tokenCount: estimateTokens(fullText) }];
+}
 
-//     setCache(key, filteredPages);
-//     return filteredPages;
-// }
-// export default extractPdfText
+// --- UPDATE MAIN EXPORT ---
+
+export default async function extractContent(file) {
+  const buffer = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer);
+  // Detect MIME type more robustly
+  const mimeType = file.mimetype || mime.lookup(file.originalname) || 'application/octet-stream';
+  const cacheKey = hashBuffer(buffer);
+
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+
+  let processedPages = [];
+
+  try {
+    if (mimeType === 'application/pdf') {
+      processedPages = await extractPdfText(buffer);
+    } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') { // DOCX
+      processedPages = await extractDocxText(buffer);
+    } else if (mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') { // PPTX
+      processedPages = await extractPptxText(buffer);
+    } else if (mimeType === 'text/plain' || mimeType === 'text/markdown') {
+      processedPages = await extractTxtText(buffer);
+    } else if (mimeType === 'application/epub+zip') {
+      processedPages = await extractEpubText(buffer);
+    } else if (mimeType.startsWith('image/')) {
+      processedPages = await extractImageText(buffer, mimeType);
+    } else {
+      // Fallback: Try office parser as generic
+      try {
+        const text = await officeParser.parseOfficeAsync(buffer);
+        processedPages = simulatePagination(text);
+      } catch (e) {
+        console.warn(`Unsupported file type: ${mimeType}`);
+        processedPages = [];
+      }
+    }
+  } catch (err) {
+    console.error(`Error processing file type ${mimeType}:`, err);
+    throw err;
+  }
+
+  if (processedPages.length > 0) cache.set(cacheKey, processedPages);
+  return processedPages;
+}

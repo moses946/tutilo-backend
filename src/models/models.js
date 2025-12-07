@@ -108,7 +108,15 @@ export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, 
             type: Type.ARRAY,
             // minItems: 5, 
             maxItems: 20,
-            items: { type: Type.STRING }
+            items: { 
+              type: Type.OBJECT,
+              properties: {
+                type: { type: Type.STRING },
+                front: { type: Type.STRING },
+                back: { type: Type.STRING, nullable: true }
+              },
+              required: ["type", "front"]
+            }
           },
         },
       },

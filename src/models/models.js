@@ -132,10 +132,13 @@ export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, 
 
 export const handleChatSummarization = async (existingSummary, messagesToSummarize) => {
   try {
-    const conversationText = messagesToSummarize.map(m =>
-      `${m.role.toUpperCase()}: ${m.parts[0].text}`
-    ).join('\n');
+    // Convert message objects to a clean text transcript
+    const conversationText = messagesToSummarize.map(m => {
+      const content = m.parts && m.parts[0] && m.parts[0].text ? m.parts[0].text : '[Media/System Message]';
+      return `${m.role.toUpperCase()}: ${content}`;
+    }).join('\n');
 
+    // Use the refined prompt factory
     const prompt = chatSummarizationPrompt(existingSummary, conversationText);
 
     const response = await ai.models.generateContent({
@@ -144,7 +147,10 @@ export const handleChatSummarization = async (existingSummary, messagesToSummari
       config: {
         responseMimeType: 'application/json',
         responseSchema: {
-          type: Type.STRING
+          type: Type.OBJECT,
+          properties: {
+            summary: { type: Type.STRING }
+          }
         },
         thinkingConfig: {
           thinkingBudget: 0
@@ -152,10 +158,11 @@ export const handleChatSummarization = async (existingSummary, messagesToSummari
       }
     });
 
-    return response.text;
+    const result = JSON.parse(response.text);
+    return result.summary;
   } catch (error) {
     console.error('Error summarizing chat:', error);
-    return existingSummary;
+    return existingSummary; // Fallback to old summary if fail
   }
 }
 
@@ -301,7 +308,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
       });
     }
 
-    var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message)
+    var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message, summary);
 
     // Return metadata combined with message
     return { ...agentResponse, chunkMetadata };
@@ -407,15 +414,15 @@ RULES:
  * }
  */
 
-export async function agentLoop(userId, chatObj, chatRef, message = []) {
+export async function agentLoop(userId, chatObj, chatRef, message = [], summary = '') {
   /**
    * This function should handle running the agent, Takes the chat history and runs inference
    */
   var userObj = userMap.get(userId);
   var plan = userObj.plan;
   var modelLimits = getModelConfig(plan);
-  let prompt = agentPrompt(userObj);
-  let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length - 1), chatObj.chunks);
+  let prompt = agentPrompt(userObj, summary);
+  let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length - 1), chatObj.chunks, summary);
   var agentResponse;
   var isMedia = false;
   var aiMessageRef;

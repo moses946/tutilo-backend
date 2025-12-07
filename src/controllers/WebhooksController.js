@@ -39,7 +39,7 @@ export async function videoReadyWebhook(req, res) {
     }
     await createMessageQuery({chatRef, content:functionResponsePart, role:'system'})
     chatObj.history.push(functionResponse)
-    var response = await agentLoop(userID, chatObj, chatRef, [functionResponse])
+    var response = await agentLoop(userID, chatObj, chatRef, [functionResponse], "")
     try{
         // get the message ref and update
         if(errorLog && client_sockets){

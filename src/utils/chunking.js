@@ -130,25 +130,6 @@ function estimateTokens(text) {
   return Math.round(words * TOKEN_ESTIMATION_RATIO);
 }
 
-// Helper to simulate paging for non-paginated formats (DOCX, TXT, EPUB)
-// Splits text into chunks of approx 500 words
-function simulatePagination(fullText) {
-  if (!fullText) return [];
-  const words = fullText.split(/\s+/);
-  const wordsPerPage = 500;
-  const pages = [];
-
-  for (let i = 0; i < words.length; i += wordsPerPage) {
-    const pageText = words.slice(i, i + wordsPerPage).join(' ');
-    pages.push({
-      pageNumber: Math.floor(i / wordsPerPage) + 1,
-      text: pageText,
-      tokenCount: estimateTokens(pageText)
-    });
-  }
-  return pages.length > 0 ? pages : [{ pageNumber: 1, text: fullText, tokenCount: estimateTokens(fullText) }];
-}
-
 // --- Extractors ---
 
 // Render page with optimized text extraction

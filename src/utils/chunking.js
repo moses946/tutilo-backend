@@ -24,7 +24,7 @@ const PATTERNS = {
   dotLeaders: /\.{3,}/g,
   lineEndsWithNum: /\d+$/,
   dotLeaderWithNum: /\.{2,}/,
-  
+
   // Mathematical indicators (combined for single pass)
   mathKeywords: /\b(equation|theorem|proof|lemma|corollary|definition|formula|sin|cos|tan|log|ln|exp|sqrt|lim|sum|int)\b/i,
   mathOperators: /\d+\s*[+\-*/×÷]\s*\d+/,
@@ -32,7 +32,7 @@ const PATTERNS = {
   mathParens: /\([^)]*[+\-*/=][^)]*\)/,
   mathSymbols: /[∑∫∏∂∇∆√∞∈∉⊂⊃∪∩αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ]/,
   mathNotation: /[\^_]\{|_\d|\\[a-zA-Z]+/,
-  
+
   // Extended character set for filtering
   allowedChars: /[A-Za-z0-9\s.,;:()'/±×÷=+\-*^_{}\[\]<>∞≈≠≤≥αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ∑∫∏∂∇∆√∈∉⊂⊃∪∩∀∃∄∅∧∨¬⊕⊗⊥∥∠°′″‴∝∼≅≡≢≪≫⊆⊇⊊⊋∖℘ℕℤℚℝℂ·×∘∙⊙⊖⊕⊗⊘⊚⊛⊜⊝⊞⊟⊠⊡⟨⟩⟦⟧‖|!@#$%&]/
 };
@@ -43,7 +43,7 @@ class LRUCache {
     this.maxSize = maxSize;
     this.cache = new Map();
   }
-  
+
   get(key) {
     if (!this.cache.has(key)) return undefined;
     const value = this.cache.get(key);
@@ -52,7 +52,7 @@ class LRUCache {
     this.cache.set(key, value);
     return value;
   }
-  
+
   set(key, value) {
     this.cache.set(key, value);
     if (this.cache.size > this.maxSize) {
@@ -69,39 +69,41 @@ function hashBuffer(buffer) {
   return crypto.createHash('sha1').update(buffer).digest('hex');
 }
 
+// --- Text Processing Helpers ---
+
 // Optimized math content detection with single-pass checking
 function hasMathContent(text) {
   return PATTERNS.mathKeywords.test(text) ||
-         PATTERNS.mathOperators.test(text) ||
-         PATTERNS.mathAssignment.test(text) ||
-         PATTERNS.mathParens.test(text) ||
-         PATTERNS.mathSymbols.test(text) ||
-         PATTERNS.mathNotation.test(text);
+    PATTERNS.mathOperators.test(text) ||
+    PATTERNS.mathAssignment.test(text) ||
+    PATTERNS.mathParens.test(text) ||
+    PATTERNS.mathSymbols.test(text) ||
+    PATTERNS.mathNotation.test(text);
 }
 
 // Optimized noise detection
 function isNoisyPage(text) {
   const len = text.length;
   if (len < MIN_PAGE_LENGTH) return true;
-  
+
   const isMathContent = hasMathContent(text);
-  
+
   // Character-based noise detection
   let nonAllowed = 0;
   for (let i = 0; i < len; i++) {
     if (!PATTERNS.allowedChars.test(text[i])) nonAllowed++;
   }
-  
+
   const noiseThreshold = isMathContent ? NOISE_THRESHOLD_MATH : NOISE_THRESHOLD_DEFAULT;
   if (nonAllowed / len > noiseThreshold) return true;
-  
+
   // Skip TOC detection for math content
   if (isMathContent) return false;
-  
+
   // TOC pattern detection (optimized)
   const dotLeaders = (text.match(PATTERNS.dotLeaders) || []).length;
   if (dotLeaders >= TOC_DOT_THRESHOLD) return true;
-  
+
   const lines = text.split('\n');
   let leaderOrNumLines = 0;
   for (const line of lines) {
@@ -111,13 +113,13 @@ function isNoisyPage(text) {
     }
   }
   if (leaderOrNumLines >= TOC_LINE_THRESHOLD) return true;
-  
+
   // TOC keyword detection
   const lower = text.toLowerCase();
-  const hasTocKeyword = lower.includes('table of contents') || 
-                        (lower.includes('contents') && dotLeaders >= 2) ||
-                        (lower.includes('index') && dotLeaders >= 2);
-  
+  const hasTocKeyword = lower.includes('table of contents') ||
+    (lower.includes('contents') && dotLeaders >= 2) ||
+    (lower.includes('index') && dotLeaders >= 2);
+
   return hasTocKeyword && (dotLeaders >= 2 || leaderOrNumLines >= 2);
 }
 
@@ -128,34 +130,55 @@ function estimateTokens(text) {
   return Math.round(words * TOKEN_ESTIMATION_RATIO);
 }
 
+// Helper to simulate paging for non-paginated formats (DOCX, TXT, EPUB)
+// Splits text into chunks of approx 500 words
+function simulatePagination(fullText) {
+  if (!fullText) return [];
+  const words = fullText.split(/\s+/);
+  const wordsPerPage = 500;
+  const pages = [];
+
+  for (let i = 0; i < words.length; i += wordsPerPage) {
+    const pageText = words.slice(i, i + wordsPerPage).join(' ');
+    pages.push({
+      pageNumber: Math.floor(i / wordsPerPage) + 1,
+      text: pageText,
+      tokenCount: estimateTokens(pageText)
+    });
+  }
+  return pages.length > 0 ? pages : [{ pageNumber: 1, text: fullText, tokenCount: estimateTokens(fullText) }];
+}
+
+// --- Extractors ---
+
 // Render page with optimized text extraction
 async function renderPage(pageData) {
   const textContent = await pageData.getTextContent();
   const items = textContent.items || [];
-  
+
   let result = '';
   let prevStr = '';
-  
+
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const curr = item.str || '';
-    
+
     if (i > 0 && curr) {
       const prevEndsAlphaNum = PATTERNS.alphaNumEnd.test(prevStr);
       const currStartsAlphaNum = PATTERNS.alphaNumStart.test(curr);
       const needsSpace = prevEndsAlphaNum && currStartsAlphaNum;
-      
+
       if (item.hasEOL) {
         result += '\n';
       } else if (needsSpace) {
         result += ' ';
       }
     }
-    
+
     result += curr;
     prevStr = curr;
   }
-  
+
   return result + PAGE_SPLIT;
 }
 
@@ -164,15 +187,15 @@ async function extractPdfText(file) {
   // Normalize input to Buffer
   const buffer = Buffer.isBuffer(file) ? file : Buffer.from(file);
   const cacheKey = hashBuffer(buffer);
-  
+
   // Check cache
   const cached = cache.get(cacheKey);
   if (cached) return cached;
-  
+
   // Parse PDF
   const result = await pdfParse(buffer, { pagerender: renderPage });
   const pages = (result.text || '').split(PAGE_SPLIT);
-  
+
   // Process pages with 1-based numbering
   const processedPages = pages
     .map((text, index) => {
@@ -185,7 +208,7 @@ async function extractPdfText(file) {
     })
     .filter(p => p.text.length > 0) // Remove blank pages
     .filter(p => !isNoisyPage(p.text)); // Remove noisy pages
-  
+
   // Cache and return
   cache.set(cacheKey, processedPages);
   return processedPages;

@@ -2,7 +2,7 @@ import express from 'express';
 import {upload} from '../utils/utility.js'
 import { planLimits } from '../config/plans.js';
 
-import { handleConceptChatCreate, handleConceptDetail, handleConceptList, handleConceptMapRetrieval, handleMaterialDownload, handleNotebookCreation, handleNotebookDeletion, handleNotebookEditFetch, handleNotebookFetch, handleNotebookRead, handleNotebookUpdate, handleUserProgressUpdate, handleChunkFetch } from '../controllers/NotebookController.js';
+import { handleConceptChatCreate, handleConceptDetail, handleConceptList, handleConceptMapRetrieval, handleMaterialDownload, handleNotebookCreation, handleNotebookDeletion, handleNotebookEditFetch, handleNotebookFetch, handleNotebookRead, handleNotebookUpdate, handleUserProgressUpdate, handleChunkFetch, handleNotebookStatus, handleNotebookProcessing } from '../controllers/NotebookController.js';
 
 
 // Helper to convert MB to bytes
@@ -45,6 +45,10 @@ async function validateUploads(req, res, next) {
 }
 const notebookRouter = express.Router();
 notebookRouter.post('/', upload.array('files'),validateUploads, handleNotebookCreation);
+// [INSERT] New Async processing routes
+notebookRouter.post('/:id/process', handleNotebookProcessing);
+notebookRouter.get('/:id/status', handleNotebookStatus);
+
 notebookRouter.delete('/:id', handleNotebookDeletion);
 notebookRouter.put('/:id', upload.array('files'), validateUploads,handleNotebookUpdate)
 notebookRouter.get('/', handleNotebookRead);

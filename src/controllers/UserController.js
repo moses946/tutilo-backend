@@ -1,4 +1,4 @@
-import { db } from "../services/firebase.js";
+import admin, { db } from "../services/firebase.js";
 
 export const handleUpdateUser = async (req, res) => {
     try {
@@ -61,4 +61,20 @@ export const handleUpdateUser = async (req, res) => {
     }
 };
 
-// ... keep existing get functions ...
+export const handleDeleteUser = async (req, res) => {
+   try{ 
+    const {userId} = req.params;
+    let userRef = db.collection('User').doc(userId);
+    let timestamp = admin.firestore.FieldValue.serverTimestamp();
+    await userRef.update({isDeleted:true, deletedAt:timestamp});
+    }catch(err){
+        console.log(`[ERROR] -- user deletion: ${err}`);
+        res.status(400).json({error:'Failed to delete account'});
+        return
+    }
+    res.status(200).json({
+        message:'Account deleted successfully'
+    })
+
+
+}

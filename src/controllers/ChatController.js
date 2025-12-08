@@ -1,4 +1,4 @@
-import { handleRunAgent } from "../models/models.js";
+import { handleChatSummarization, handleRunAgent } from "../models/models.js";
 import { createMessageQuery, deleteChatQuery } from "../models/query.js";
 import admin, { bucket, db } from "../services/firebase.js";
 import { handleBulkFileUpload } from "../utils/utility.js";
@@ -158,42 +158,39 @@ export async function handleCreateMessage(req, res) {
         }
 
         // OPTIMIZATION: Chat Summarization Logic
-        // If history is too long (e.g., > 10 turns), summarize the older part
         // We keep the last 10 messages for immediate context + the summary
         const CONTEXT_WINDOW_SIZE = 10;
         chatObj.history.push(message);
-        if (chatObj.history.length > CONTEXT_WINDOW_SIZE * 2) {
-            // Extract messages to summarize (everything except last CONTEXT_WINDOW_SIZE)
-            const messagesToSummarize = chatObj.history.slice(0, chatObj.history.length - CONTEXT_WINDOW_SIZE);
-            // Keep the recent ones
-            const recentMessages = chatObj.history.slice(chatObj.history.length - CONTEXT_WINDOW_SIZE);
 
-            // Generate new summary asynchronously
+        // Check if history exceeds double the window (trigger point)
+        if (chatObj.history.length > CONTEXT_WINDOW_SIZE * 2) {
+            console.log(`[ChatController] Summarizing chat ${chatID}...`);
+            
+            // 1. Identify messages to archive vs keep
+            const cutOffIndex = chatObj.history.length - CONTEXT_WINDOW_SIZE;
+            const messagesToSummarize = chatObj.history.slice(0, cutOffIndex);
+            const recentMessages = chatObj.history.slice(cutOffIndex);
+            // 2. Generate new summary
             const newSummary = await handleChatSummarization(existingSummary, messagesToSummarize);
 
-            // Update Firestore with new summary
+            // 3. Update Database
             await chatRef.update({ summary: newSummary });
-            existingSummary = newSummary;
-
-            // Update in-memory history: [System Summary, ...Recent Messages]
-            // We represent summary as a system message for the Agent context
-            chatObj.history = recentMessages;
+            
+            // 4. Update Memory
+            existingSummary = newSummary; // Update local var for the agent to use below
+            chatObj.history = recentMessages; // Truncate in-memory history
+            
+            console.log(`[ChatController] Summary updated.`);
         }
-        // Inject summary into the context passed to the agent if it exists
-        // We create a temporary object for the agent so we don't pollute the actual message history array with system prompts repeatedly
+
+        // Prepare context for the Agent
         let agentContextObj = {
             ...chatObj,
-            history: [...chatObj.history]
+            history: [...chatObj.history] 
         };
 
-        if (existingSummary) {
-            agentContextObj.history.unshift({
-                role: 'user', // Using user role to ensure model pays attention, or 'model' as preamble
-                parts: [{ text: `[CONTEXT SUMMARY]: The following is a summary of the conversation so far: ${existingSummary}` }]
-            });
-        }
-        // run the AI agent to get the response
-        result = await handleRunAgent(req, data, agentContextObj, chatRef);
+        result = await handleRunAgent(req, data, agentContextObj, chatRef, existingSummary);
+        
         if (result.message) {
             chatObj.history.push({ role: 'model', parts: [{ text: result.message }] });
         }

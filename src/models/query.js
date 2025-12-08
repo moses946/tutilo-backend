@@ -28,7 +28,7 @@ export const createNotebookQuery = async (notebook) => {
         dateUpdated: now,
         isDeleted:false,
         materialRefs: [], // Will be populated with material references
-        status: 'processing',
+        status: notebook.status || 'processing',
         links: Array.isArray(notebook.links) ? notebook.links : [],
         texts: Array.isArray(notebook.texts) ? notebook.texts : []
     });
@@ -143,7 +143,6 @@ Input: notebookRef: DocumentReference, materialRefs: Array of DocumentReferences
 export const updateNotebookWithMaterials = async (notebookRef, materialRefs) => {
     await notebookRef.update({
         materialRefs: materialRefs,
-        status: 'completed',
         dateUpdated: admin.firestore.FieldValue.serverTimestamp()
     });
 }

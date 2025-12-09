@@ -16,3 +16,4 @@ public/
 logs/ 
 tmp/ 
 `
+ ## Deployment Guide

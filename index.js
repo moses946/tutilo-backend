@@ -180,6 +180,6 @@ cron.schedule('0 3 * * *', async () => {
   }
 });
 // Start server (Cloud Run requires listen on process.env.PORT)
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });

@@ -52,7 +52,11 @@ Example:
 
 ### 3. Construct the Hierarchical Graph (\`graph\`)
 - Build a top-down, tree-like graph of nodes and edges representing the relationships between concepts.
-- Create nodes within a reasonable range such that the mindmap will still have clarity
+- **Scope & Granularity (STRICT):**
+    - **Cognitive Load Management:** The map must NOT be daunting. It should feel like a clean "Table of Contents".
+    - **Target Range:** Aim for **7 to 12 nodes**. This is the sweet spot. Only go up to 15 if the material is massive (e.g., entire textbook chapter).
+    - **Merging Strategy:** If a concept is a minor detail, type, or example (e.g., "Types of Attacks"), **do NOT** make child nodes for every single type. Instead, keep the parent node "Attacks" and ensure the chunks for those types are mapped to it.
+    - **Depth Limit:** Try to keep the tree depth to 3 levels maximum (Root -> Categories -> Concepts).
 
 #### Graph Layout Principles:
 - **Hierarchy is Key:** The graph must flow strictly from top-to-bottom. The most general concept is the root. More specific concepts are its children.
@@ -118,44 +122,6 @@ Output:
       { "id": "e1-2", "source": "photosynthesis", "target": "chlorophyll" },
       { "id": "e1-3", "source": "photosynthesis", "target": "lightReactions" },
       { "id": "e1-4", "source": "photosynthesis", "target": "calvinCycle" }
-    ]
-  }
-}
-
-### Example 2: Multi-Level Hierarchy
-
-Input:
-<chunkID: 1>
-[Introduction to calculus covers fundamental concepts of change and motion.]
-<chunkID: 2>
-[Limits describe the behavior of functions as inputs approach specific values.]
-<chunkID: 3>
-[Derivatives measure the rate of change of a function.]
-<chunkID: 4>
-[The product rule is used to differentiate products of functions.]
-<chunkID: 5>
-[The chain rule handles composite functions.]
-<chunkID: 6>
-[Integrals calculate the accumulation of quantities.]
-
-Output:
-{
-  "summary": "This material introduces calculus, covering limits, derivatives, and integrals. Derivatives include techniques like the product rule and chain rule.",
-  "graph": {
-    "nodes": [
-      { "id": "calculus", "position": { "x": 0, "y": 0 }, "data": { "label": "Introduction to Calculus", "chunkIds": ["1"] } },
-      { "id": "limits", "position": { "x": -250, "y": 175 }, "data": { "label": "Limits", "chunkIds": ["2"] } },
-      { "id": "derivatives", "position": { "x": 0, "y": 175 }, "data": { "label": "Derivatives", "chunkIds": ["3"] } },
-      { "id": "integrals", "position": { "x": 250, "y": 175 }, "data": { "label": "Integrals", "chunkIds": ["6"] } },
-      { "id": "productRule", "position": { "x": -125, "y": 350 }, "data": { "label": "Product Rule", "chunkIds": ["4"] } },
-      { "id": "chainRule", "position": { "x": 125, "y": 350 }, "data": { "label": "Chain Rule", "chunkIds": ["5"] } }
-    ],
-    "edges": [
-      { "id": "e1-2", "source": "calculus", "target": "limits" },
-      { "id": "e1-3", "source": "calculus", "target": "derivatives" },
-      { "id": "e1-6", "source": "calculus", "target": "integrals" },
-      { "id": "e3-4", "source": "derivatives", "target": "productRule" },
-      { "id": "e3-5", "source": "derivatives", "target": "chainRule" }
     ]
   }
 }

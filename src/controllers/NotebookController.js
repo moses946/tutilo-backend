@@ -760,7 +760,7 @@ export async function handleMaterialDownload(req, res) {
 
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
-
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         const stream = file.createReadStream();
         stream.on('error', (error) => {
             console.error('Error streaming material file:', error);

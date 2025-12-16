@@ -64,7 +64,8 @@ const allowedOrigins = [
   'http://localhost:3000',           // Local development
   'http://localhost:5173',           // Vite dev server
   'http://localhost:5174',           // Alternative Vite port
-  'https://tutilo-beta.web.app',     // Production frontend (no trailing slash)
+  'https://tutilo-beta.web.app',  
+  'https://tutilo-beta.firebaseapp.com'   // Production frontend (no trailing slash)
   // Add more allowed origins here
 ];
 

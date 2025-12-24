@@ -654,7 +654,6 @@ export async function handleConceptChatCreate(req, res) {
             await chatRef.update({
                 dateUpdated: now,
                 conceptName: conceptContext.conceptName,
-                // conceptSummary: conceptContext.summary || '',
                 referenceMaterials: referenceMaterialsPayload,
                 conceptChunks: conceptContext.chunks,
             });
@@ -667,32 +666,46 @@ export async function handleConceptChatCreate(req, res) {
                 title: conceptContext.conceptName || 'Concept Chat',
                 conceptId,
                 conceptName: conceptContext.conceptName,
-                // conceptSummary: conceptContext.summary || '',
-                // conceptType: 'concept-map',
                 referenceMaterials: referenceMaterialsPayload,
                 conceptChunks: conceptContext.chunks,
             };
 
             chatRef = await db.collection('Chat').add(payload);
+        }
 
-            // Check if a quiz already exists before generating a new one
-            const quizSnapshot = await db.collection('Quizzes')
-                .where('chatID', '==', chatRef)
-                .limit(1)
-                .get();
+        // --- QUIZ GENERATION & RETRIEVAL LOGIC START ---
+        let quizQuestions = [];
+        
+        // Check if a quiz already exists
+        const quizSnapshot = await db.collection('Quizzes')
+            .where('chatID', '==', chatRef)
+            .limit(1)
+            .get();
 
-            if (quizSnapshot.empty) {
-                // Generate and store the quiz for the concept only if it doesn't exist
-                await handleQuizGeneration(chatRef.id, conceptContext.chunks);
+        if (!quizSnapshot.empty) {
+            // Quiz exists, return it
+            quizQuestions = quizSnapshot.docs[0].data().questions;
+        } else {
+            // Generate new quiz
+            const quizRef = await handleQuizGeneration(chatRef.id, conceptContext.chunks);
+            if (quizRef) {
+                // If createQuizQuery returns a ref, fetch it to get the questions
+                // Note: handleQuizGeneration returns the doc ref, but we need the data we just generated.
+                // Ideally handleQuizGeneration should return the data or we fetch it. 
+                // Assuming standard firestore behavior, we fetch the new doc:
+                const newQuizDoc = await quizRef.get();
+                quizQuestions = newQuizDoc.data().questions;
             }
         }
+        // --- QUIZ GENERATION & RETRIEVAL LOGIC END ---
+
         res.json({
             chatId: chatRef.id,
             conceptId,
             conceptName: conceptContext.conceptName,
-            // conceptSummary: conceptContext.summary || '',
             references: conceptContext.materials,
             chunks: conceptContext.chunks,
+            quiz: quizQuestions // Return quiz directly in response
         });
     } catch (err) {
         console.error('Error creating concept chat:', err);

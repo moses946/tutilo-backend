@@ -3,6 +3,10 @@ import { app, db, verifyToken } from "../services/firebase.js"
 export var userMap = new Map();
 export const authMiddleWare = async(req, res, next)=>{
     try{
+        if (!req.headers.authorization){
+            res.status(401).json({error:'Unauthorized: No authorization header provided'});
+            return;
+        }
         let authHeader = req.headers.authorization;
         let parts = authHeader.split(' ');
         if(parts.length!==2||parts[0]!=='Bearer'){

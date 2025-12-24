@@ -1,11 +1,12 @@
 import { getModelConfig, planLimits } from "../config/plans.js";
 import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGeneration } from "../models/models.js";
-import { createChunksQuery, createConceptMapQuery, createMaterialQuery, createNotebookQuery, deleteNotebookQuery, readNotebooksQuery, removeMaterialFromNotebook, updateChunksWithQdrantIds, updateMaterialWithChunks, updateNotebookWithFlashcards, updateNotebookWithMaterials } from "../models/query.js";
+import { createChunksQuery, createConceptMapQuery, createMaterialQuery, createNotebookQuery, deleteNotebookQuery, readNotebooksQuery, removeMaterialFromNotebook, updateChunksWithQdrantIds, updateMaterialWithChunks, updateNotebookWithFlashcards, updateNotebookWithMaterials, updateNotebookWithDetailedSummary } from "../models/query.js";
 import admin, { bucket, db } from "../services/firebase.js";
 import { convertImageToPdf, convertTextToPdf } from "../utils/pdfConverter.js";
 import extractPdfText from "../utils/chunking.js";
-import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, handleChunkEmbeddingAndStorage } from "../utils/utility.js";
+import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, handleChunkEmbeddingAndStorage, handleNotebookDetailedSummary } from "../utils/utility.js";
 import extractContent from "../utils/chunking.js";
+import { generateAudio } from "../utils/audioSummaries.js";
 
 
 const preprocessFileForPdfSimple = async (file) => {
@@ -201,6 +202,35 @@ export async function handleNotebookProcessing(req, res) {
         }
 
         await notebookRef.update({ status: 'completed' });
+        
+        // Generate detailed summary in the background (non-blocking)
+        // Start the generation but don't await it - it will update the notebook when done
+        if (chunkRefsCombined.length > 0) {
+            // Store the promise to ensure it doesn't get garbage collected
+            const detailedSummaryPromise = (async () => {
+                try {
+                    const detailedSummary = await handleNotebookDetailedSummary(notebookId);
+                    // Get a fresh reference to ensure it's still valid
+                    const currentNotebookRef = db.collection('Notebook').doc(notebookId);
+                    await updateNotebookWithDetailedSummary(currentNotebookRef, detailedSummary);
+                    console.log(`[Background] Detailed summary generated for notebook ${notebookId}`);
+                } catch (err) {
+                    console.error(`[Background] Failed to generate detailed summary for notebook ${notebookId}:`, err);
+                    // Optionally update with error message or leave empty
+                    try {
+                        const currentNotebookRef = db.collection('Notebook').doc(notebookId);
+                        await updateNotebookWithDetailedSummary(currentNotebookRef, 'Error generating detailed summary. Please try again later.');
+                    } catch (updateErr) {
+                        console.error('Failed to update error message:', updateErr);
+                    }
+                }
+            })();
+            
+            // Ensure the promise is handled (attach error handler to prevent unhandled rejection)
+            detailedSummaryPromise.catch(err => {
+                console.error(`[Background] Unhandled error in detailed summary generation for notebook ${notebookId}:`, err);
+            });
+        }
         
         // NOW we send the response
         res.json({ status: 'completed', message: 'Processing finished' });
@@ -1043,6 +1073,31 @@ export async function handleNotebookRead(req, res) {
     } catch (err) {
         res.status(500).json({
             error: 'Failed to fetch notebooks',
+            details: err.message
+        });
+    }
+}
+
+
+export async function handleAudioGeneration(req, res) {
+    try {
+        if (!req.body || !req.body.text) {
+            return res.status(400).json({
+                error: 'Text is required',
+                message: 'Please provide text in the request body'
+            });
+        }
+
+        const audio = await generateAudio(req.body.text);
+        res.set({
+            'Content-Type': 'audio/mpeg',
+            'Content-Length': audio.length,
+        });
+        res.send(audio);
+    } catch (err) {
+        console.error('Audio generation error:', err);
+        res.status(500).json({
+            error: 'Failed to generate audio',
             details: err.message
         });
     }

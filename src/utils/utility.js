@@ -353,3 +353,160 @@ export const handleSendToVideoGen = async (data)=>{
       });
     return response
 }
+
+/*
+  Generate a detailed summary of a notebook by accessing all chunks
+  Input: notebookId: string
+  Output: string - A comprehensive summary explaining every concept present in the notebook
+*/
+export const handleNotebookDetailedSummary = async (notebookId) => {
+    try {
+        // 1. Get the notebook document
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+        const notebookSnap = await notebookRef.get();
+        
+        if (!notebookSnap.exists) {
+            throw new Error(`Notebook with ID ${notebookId} not found`);
+        }
+
+        const notebookData = notebookSnap.data();
+        const materialRefs = notebookData.materialRefs || [];
+
+        if (materialRefs.length === 0) {
+            return 'This notebook does not contain any materials yet.';
+        }
+
+        // 2. Collect all chunk references from all materials
+        const allChunkRefs = [];
+        const chunkMetadata = [];
+
+        // Fetch all materials in parallel for better performance
+        const materialSnaps = await Promise.all(materialRefs.map(ref => ref.get()));
+        
+        for (let i = 0; i < materialSnaps.length; i++) {
+            const materialSnap = materialSnaps[i];
+            if (!materialSnap.exists) continue;
+
+            const materialData = materialSnap.data();
+            const chunkRefs = materialData.chunkRefs || [];
+
+            // Get chunk documents to retrieve metadata
+            if (chunkRefs.length > 0) {
+                const chunkSnaps = await db.getAll(...chunkRefs);
+                chunkSnaps.forEach((chunkSnap, index) => {
+                    if (chunkSnap.exists) {
+                        const chunkData = chunkSnap.data();
+                        allChunkRefs.push(chunkRefs[index]);
+                        chunkMetadata.push({
+                            chunkId: chunkSnap.id,
+                            pageNumber: chunkData.pageNumber || null,
+                            materialName: materialData.name || 'Unknown Material'
+                        });
+                    }
+                });
+            }
+        }
+
+        if (allChunkRefs.length === 0) {
+            return 'This notebook does not contain any processed chunks yet.';
+        }
+
+        // 3. Retrieve all chunk texts from storage
+        const chunkBasePath = `notebooks/${notebookId}/chunks/`;
+        const chunkPaths = allChunkRefs.map(chunkRef => `${chunkBasePath}${chunkRef.id}.json`);
+        
+        const chunkContents = await handleBulkChunkRetrieval(chunkPaths);
+
+        // 4. Format chunks with metadata for the AI model
+        // Combine chunk text with metadata for better context
+        const formattedChunks = chunkContents.map((chunkContent, index) => {
+            const metadata = chunkMetadata[index];
+            // Handle different chunk content formats
+            let text;
+            if (typeof chunkContent === 'string') {
+                text = chunkContent;
+            } else if (typeof chunkContent === 'object' && chunkContent !== null) {
+                // If it's an object, try to extract text property or stringify
+                text = chunkContent.text || chunkContent.content || JSON.stringify(chunkContent);
+            } else {
+                text = String(chunkContent);
+            }
+            return `[Material: ${metadata.materialName}, Page: ${metadata.pageNumber || 'N/A'}]\n${text}`;
+        });
+
+        // Combine all chunks into a single text for processing
+        const allChunksText = formattedChunks.join('\n\n---\n\n');
+
+        // 5. Generate detailed summary using AI model
+        const summaryPrompt = `
+        **TASK:** Synthesize the provided notebook content into a comprehensive, spoken-word lecture script. 
+        The content consists of multiple chunks; you must weave them into a single, cohesive narrative without redundancy.
+
+        **CRITICAL FORMATTING RULES (STRICT):**
+        1.  **NO MARKDOWN:** Do not use bold (**), italics (*), headers (#), or bullet points. This text will be read by a Text-to-Speech engine.
+        2.  **SPOKEN FLOW:** Use natural punctuation (commas, periods) to control the pacing. 
+        3.  **FORMULAS:** If math or technical notation is present, write it phonetically (e.g., write "squared" instead of "^2", "alpha" instead of "α").
+
+        **REQUIRED STRUCTURE:**
+        Your response must flow logically through these four sections:
+
+        1.  **The Introduction:**
+            * Greet the student as Professor Mwai.
+            * Provide a high-level "Roadmap" of what will be covered in this session.
+
+        2.  **The Deep Dive (Key Concepts):**
+            * Identify every major theory, principle, or topic.
+            * For each concept, provide a clear definition followed immediately by a concrete, real-world analogy suitable for a university student.
+            * Explain how these concepts relate to one another (connect the dots).
+
+        3.  **Practical Application:**
+            * Explain *why* this matters. How is this applied in the real world?
+
+        4.  **The Conclusion:**
+            * Briefly recap the main takeaways.
+            * End with an encouraging sign-off.
+
+        **CONTENT TO ANALYZE:**
+        ${allChunksText}
+
+        **Generate the lecture script now:**
+        `;
+        // Define the System Instruction (The Persona)
+        // This sets the behavior for the entire interaction
+        const systemInstruction = {
+            role: 'system',
+            parts: [{ 
+                text: `You are Professor Mwai, an expert educational content analyzer. 
+                Your persona is warm, authoritative, and engaging. 
+                You specialize in synthesizing complex educational content into clear, spoken-word style lectures for university students. 
+                You prioritize accuracy and clarity over jargon.` 
+            }]
+        };
+
+        // Define the Generation Config (The Settings)
+        const generationConfig = {
+            temperature: 0.3, // Lowered for factual consistency
+            topP: 0.95,
+            topK: 40,
+            maxOutputTokens: 8192, // Ensure enough space for long summaries
+        };
+
+        // Make the Call
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash', 
+            systemInstruction: systemInstruction, // Moved out of config
+            generationConfig: generationConfig,   // Renamed for clarity
+            contents: [{ 
+                role: 'user', 
+                parts: [{ text: summaryPrompt }] 
+            }]
+        });
+
+        const summary = response.text || 'Unable to generate summary.';
+        return summary;
+
+    } catch (err) {
+        console.error(`Error in handleNotebookDetailedSummary for notebook ${notebookId}:`, err);
+        throw err;
+    }
+}

@@ -17,6 +17,7 @@
   "dependencies": {
     "@google/genai": "^1.16.0",
     "@qdrant/js-client-rest": "^1.15.1",
+    "axios": "^1.13.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "epub2": "^3.0.2",
@@ -24,13 +25,14 @@
     "firebase-admin": "^13.4.0",
     "fs": "^0.0.1-security",
     "mammoth": "^1.11.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.47.0",
     "mime-types": "^3.0.2",
     "multer": "^2.0.2",
     "node-cron": "^4.2.1",
     "officeparser": "^5.2.2",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "uuid": "^11.1.0",
-    "ws": "^8.18.3",
-    "pdf-lib": "^1.17.1"
+    "ws": "^8.18.3"
   }
 }

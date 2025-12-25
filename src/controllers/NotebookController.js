@@ -1,12 +1,13 @@
 import { getModelConfig, planLimits } from "../config/plans.js";
 import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGeneration } from "../models/models.js";
-import { createChunksQuery, createConceptMapQuery, createMaterialQuery, createNotebookQuery, deleteNotebookQuery, readNotebooksQuery, removeMaterialFromNotebook, updateChunksWithQdrantIds, updateMaterialWithChunks, updateNotebookWithFlashcards, updateNotebookWithMaterials } from "../models/query.js";
+import { createChunksQuery, createConceptMapQuery, createMaterialQuery, createNotebookQuery, deleteNotebookQuery, readNotebooksQuery, removeMaterialFromNotebook, updateChunksWithQdrantIds, updateMaterialWithChunks, updateNotebookWithFlashcards, updateNotebookWithMaterials, updateNotebookWithDetailedSummary } from "../models/query.js";
 import admin, { bucket, db } from "../services/firebase.js";
 import { convertImageToPdf, convertTextToPdf } from "../utils/pdfConverter.js";
+import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, handleChunkEmbeddingAndStorage, handleNotebookDetailedSummary } from "../utils/utility.js";
+import { generateAudio } from "../utils/audioSummaries.js";
+import pLimit from 'p-limit';
 import extractContent from "../utils/chunking.js";
-import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, handleChunkEmbeddingAndStorage } from "../utils/utility.js";
 import { handleComprehensiveQuizGeneration } from "../models/models.js";
-
 
 export async function handleGenerateNotebookQuiz(req, res) {
     const { id: notebookId } = req.params;
@@ -199,6 +200,9 @@ export async function handleNotebookProcessing(req, res) {
     const { id: notebookId } = req.params;
     const { subscription } = req.user;
     
+    // Concurrency Limit: Process 3 files at a time
+    const limit = pLimit(3);
+
     try {
         const notebookRef = db.collection('Notebook').doc(notebookId);
         const notebookSnap = await notebookRef.get();
@@ -210,78 +214,148 @@ export async function handleNotebookProcessing(req, res) {
         const modelLimits = getModelConfig(subscription);
         const vectorDim = modelLimits.vectorDim;
         const materialRefs = notebookSnap.data().materialRefs || [];
-        
-        let chunkRefsCombined = [];
-        let chunksCombined = [];
 
-        for (const materialRef of materialRefs) {
-            const materialSnap = await materialRef.get();
-            if (!materialSnap.exists) continue;
-            
-            const materialData = materialSnap.data();
-            if (materialData.chunkRefs && materialData.chunkRefs.length > 0) continue; 
+        // --- 1. ROBUST MATERIAL PROCESSING ---
+        const materialPromises = materialRefs.map((materialRef) => {
+            return limit(async () => {
+                // ISOLATED TRY/CATCH: This ensures one file failure doesn't crash the whole request
+                try {
+                    const materialSnap = await materialRef.get();
+                    if (!materialSnap.exists) return { success: false, reason: 'Material not found' };
+                    
+                    const materialData = materialSnap.data();
+                    
+                    // Skip if already chunked (Return success but with no new data)
+                    if (materialData.chunkRefs && materialData.chunkRefs.length > 0) {
+                        return { success: true, skipped: true }; 
+                    }
 
-            const storagePath = `notebooks/${notebookId}/materials/${materialData.storagePath}`;
-            const fileBuffer = await bucket.file(storagePath).download();
-            
-            const fileObj = {
-                buffer: fileBuffer[0],
-                mimetype: 'application/pdf', 
-                originalname: materialData.name
-            };
+                    const storagePath = `notebooks/${notebookId}/materials/${materialData.storagePath}`;
+                    const fileBuffer = await bucket.file(storagePath).download();
+                    
+                    const fileObj = {
+                        buffer: fileBuffer[0],
+                        mimetype: 'application/pdf', 
+                        originalname: materialData.name
+                    };
 
-            const chunks = await extractContent(fileObj);
-            const chunkRefs = await createChunksQuery(chunks, materialRef);
-            
-            const chunkBasePath = `notebooks/${notebookId}/chunks`;
-            const chunkItems = chunks.map((chunk, index) => {
-                return { ...chunk, name: chunkRefs[index].id };
-            })
-            
-            await Promise.all([
-                handleBulkChunkUpload(chunkItems, chunkBasePath),
-                updateMaterialWithChunks(materialRef, chunkRefs)
-            ]);
+                    const chunks = await extractContent(fileObj);
+                    
+                    // Guard: Handle empty or unreadable files
+                    if (!chunks || chunks.length === 0) {
+                        throw new Error(`No text content extracted from ${materialData.name}`);
+                    }
 
-            chunkRefsCombined.push(...chunkRefs);
-            chunksCombined.push(...chunks);
+                    const chunkRefs = await createChunksQuery(chunks, materialRef);
+                    
+                    const chunkBasePath = `notebooks/${notebookId}/chunks`;
+                    const chunkItems = chunks.map((chunk, index) => {
+                        return { ...chunk, name: chunkRefs[index].id };
+                    });
+                    
+                    await Promise.all([
+                        handleBulkChunkUpload(chunkItems, chunkBasePath),
+                        updateMaterialWithChunks(materialRef, chunkRefs)
+                    ]);
 
-            const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookId, vectorDim);
-            await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
+                    const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookId, vectorDim);
+                    await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
+
+                    return { success: true, chunks, chunkRefs, name: materialData.name };
+
+                } catch (fileErr) {
+                    console.error(`Failed to process material (${materialRef.id}):`, fileErr);
+                    // Return failure info so we can report it later
+                    return { success: false, reason: fileErr.message, refId: materialRef.id };
+                }
+            });
+        });
+
+        const materialResults = await Promise.all(materialPromises);
+
+        // Filter valid results
+        const successfulResults = materialResults.filter(r => r.success && !r.skipped);
+        const failedResults = materialResults.filter(r => !r.success);
+
+        // Collect data for AI
+        const chunkRefsCombined = successfulResults.flatMap(r => r.chunkRefs);
+        const chunksCombined = successfulResults.flatMap(r => r.chunks);
+
+        // DB Update: Log specific file errors if any occurred
+        if (failedResults.length > 0) {
+            await notebookRef.update({
+                processingWarnings: failedResults.map(f => `Failed to process file: ${f.reason}`)
+            });
         }
 
+        // CRITICAL CHECK: If *all* files failed (and there were files to begin with), abort.
+        if (chunkRefsCombined.length === 0 && materialRefs.length > 0) {
+            await notebookRef.update({ status: 'failed', error: 'All uploaded materials failed to process.' });
+            return; // Exit, nothing for AI to generate
+        }
+
+
+        // --- 2. ROBUST AI ASSET GENERATION ---
         if (chunkRefsCombined.length > 0) {
-            let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
-            try {
+            
+            const conceptMapTask = async () => {
+                let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
                 if (typeof result === 'string') {
                     result = result.replace(/```json/g, '').replace(/```/g, '').trim();
                 }
                 const parsedResult = JSON.parse(result);
-                await notebookRef.update({ summary: parsedResult.summary });
-                await createConceptMapQuery(parsedResult, notebookRef);
-            } catch(e) {
-                console.error("Concept map parsing error", e);
-            }
+                await Promise.all([
+                    notebookRef.update({ summary: parsedResult.summary }),
+                    createConceptMapQuery(parsedResult, notebookRef)
+                ]);
+            };
 
-            const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef, modelLimits.flashcardModel);
-            if (flashcardRef) {
-                await updateNotebookWithFlashcards(notebookRef, flashcardRef);
+            const flashcardsTask = async () => {
+                const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef, modelLimits.flashcardModel);
+                if (flashcardRef) {
+                    await updateNotebookWithFlashcards(notebookRef, flashcardRef);
+                }
+            };
+
+            const detailedSummaryTask = async () => {
+                const detailedSummary = await handleNotebookDetailedSummary(notebookId);
+                if (detailedSummary){
+                    await updateNotebookWithDetailedSummary(notebookRef, detailedSummary);
+                }
+            };
+
+            // Use allSettled: If Flashcards fail, we still want the Concept Map saved.
+            const aiResults = await Promise.allSettled([
+                conceptMapTask(),
+                flashcardsTask(),
+                detailedSummaryTask()
+            ]);
+            
+            // Optional: Log AI failures silently
+            const aiErrors = aiResults
+                .filter(r => r.status === 'rejected')
+                .map(r => r.reason.message);
+                
+            if (aiErrors.length > 0) {
+                console.error("Some AI tasks failed:", aiErrors);
+                // We might append these to warnings, or just ignore if non-critical
             }
         }
 
+        // Mark completed (even if some files failed, as long as we have *some* content)
         await notebookRef.update({ status: 'completed' });
         res.json({ status: 'completed', message: 'Processing finished' });
 
     } catch (err) {
-        console.error(`[Processing] Failed for ${notebookId}:`, err);
+        // This catch block now handles only "Catastrophic" errors (DB down, Auth fail, etc.)
+        console.error(`[Processing] Critical Failure for ${notebookId}:`, err);
         const notebookRef = db.collection('Notebook').doc(notebookId);
-        await notebookRef.update({ status: 'failed' }); 
-        if (!res.headersSent) {
-            res.status(500).json({ error: 'Processing failed', details: err.message });
-        }
+        await notebookRef.update({ status: 'failed', error: 'System error during processing.' }); 
+        res.status(500).json({ error: 'Processing failed', details: err.message });
     }
 }
 
+// [INSERT NEW FUNCTION] Simple status check
 export async function handleNotebookStatus(req, res) {
     const { id } = req.params;
     try {
@@ -961,6 +1035,65 @@ export async function handleNotebookRead(req, res) {
     } catch (err) {
         res.status(500).json({
             error: 'Failed to fetch notebooks',
+            details: err.message
+        });
+    }
+}
+
+export async function handleAudioGeneration(req, res) {
+    
+    try {
+        if (!req.body || !req.body.text && !req.body.notebookId) {
+            return res.status(400).json({
+                error: 'Text and the Notebook Id is required',
+                message: 'Please provide text and Notebook Id in the request body'
+            });
+        }
+        const { text, notebookId } = req.body;
+
+        // 1. Generate the Audio Buffer
+        const audioBuffer = await generateAudio(text);
+
+        // 2. Define Storage Path (e.g., audio-summaries/notebookID.mp3)
+        const fileName = `audio-summaries/${notebookId}_${Date.now()}.mp3`;
+        const file = bucket.file(fileName);
+
+        // 3. Upload to Storage Bucket
+        await file.save(audioBuffer, {
+            metadata: {
+                contentType: 'audio/mpeg',
+            },
+        });
+
+        // 4. Get the Public URL (Signed URL or Public Token)
+        const [url] = await file.getSignedUrl({
+            action: 'read',
+            expires: '03-01-2500', // Far future expiry
+        });
+
+        // 5. Persist the URL to the Notebook Document in Firestore
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+        const timestamp = new Date().toISOString();
+        
+        await notebookRef.set({
+            audio_url: url,
+            audio_generated_at: timestamp
+        }, { merge: true });
+
+        // 6. Send the Audio Buffer back to the client
+        res.set({
+            'Access-Control-Expose-Headers': 'X-Audio-Url, X-Audio-Timestamp',            'Content-Type': 'audio/mpeg',
+            'Content-Length': audioBuffer.length,
+            'X-Audio-Url': url,
+            'X-Audio-Timestamp': timestamp
+        });
+        
+        res.send(audioBuffer);
+
+    } catch (err) {
+        console.error('Audio generation/storage error:', err);
+        res.status(500).json({
+            error: 'Failed to generate audio',
             details: err.message
         });
     }

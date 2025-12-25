@@ -30,7 +30,8 @@ export const createNotebookQuery = async (notebook) => {
         materialRefs: [], // Will be populated with material references
         status: notebook.status || 'processing',
         links: Array.isArray(notebook.links) ? notebook.links : [],
-        texts: Array.isArray(notebook.texts) ? notebook.texts : []
+        texts: Array.isArray(notebook.texts) ? notebook.texts : [],
+        DetailedSummary: '' // Will be populated after processing
     });
     return notebookRef
 }
@@ -374,6 +375,13 @@ Input: notebookRef: DocumentReference, flashcardRef: DocumentReference
 export const updateNotebookWithFlashcards = async (notebookRef, flashcardRef) => {
     await notebookRef.update({
         flashcardRef: flashcardRef, // Single reference instead of array
+        dateUpdated: admin.firestore.FieldValue.serverTimestamp()
+    });
+}
+
+export const updateNotebookWithDetailedSummary = async (notebookRef, detailedSummary) => {
+    await notebookRef.update({
+        DetailedSummary: detailedSummary,
         dateUpdated: admin.firestore.FieldValue.serverTimestamp()
     });
 }

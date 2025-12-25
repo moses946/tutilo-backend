@@ -17,6 +17,7 @@ import quizRouter from './src/routes/QuizRoutes.js';
 import flashcardsRouter from './src/routes/FlashCardsRoutes.js';
 import analyticsRouter from './src/routes/AnalyticsRoutes.js';
 import webhookRouter from './src/routes/Webhooks.js';
+import transcriptionRouter from './src/routes/TranscriptionRoute.js';
 import { authMiddleWare } from './src/middleware/authMiddleWare.js';
 import { handleDeleteFirebaseAuthUser, verifyToken } from './src/services/firebase.js';
 import { handleMaterialDownload } from './src/controllers/NotebookController.js';
@@ -115,6 +116,7 @@ app.use('/api/v1/flashcards', flashcardsRouter);
 app.use('/api/v1/webhooks', webhookRouter);
 // -------------------
 app.use('/api/v1/analytics', analyticsRouter);
+app.use('/api/v1/transcription', authMiddleWare, transcriptionRouter);
 
 // Basic route
 app.get('/', (req, res) => res.send('Hello, Express + Cloud Run!'));

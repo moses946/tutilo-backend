@@ -553,3 +553,60 @@ export async function agentLoop(userId, chatObj, chatRef, message = [], summary 
   return { message: !isMedia ? agentResponse.text : 'Your video is being created, ready in a bit', media: isMedia, messageRef: aiMessageRef };
 
 }
+
+export const handleComprehensiveQuizGeneration = async (conceptsWithChunks) => {
+  try {
+    // conceptsWithChunks is array of { conceptId: string, conceptName: string, text: string }
+    const contextString = conceptsWithChunks.map(c => 
+      `<CONCEPT_ID: ${c.conceptId}>\n<TOPIC: ${c.conceptName}>\n[CONTENT: ${c.text}]`
+    ).join('\n\n');
+
+    const prompt = `
+    Generate a multiple-choice quiz based on the provided concepts.
+    
+    INPUT CONTEXT:
+    ${contextString}
+
+    RULES:
+    1. Generate at least one question per CONCEPT_ID provided.If you deem a concept requires more than one question, then ask more
+    2. The Output must be a valid JSON array.
+    3. Each object must strictly follow this structure:
+       {
+         "question": "string",
+         "choices": ["A", "B", "C", "D"],
+         "answer": "The correct choice string",
+         "conceptId": "The exact CONCEPT_ID from input"
+       }
+    4. Ensure the question tests understanding of the specific content provided for that concept.
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-lite',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              question: { type: Type.STRING },
+              choices: { type: Type.ARRAY, items: { type: Type.STRING } },
+              answer: { type: Type.STRING },
+              conceptId: { type: Type.STRING }
+            },
+            required: ['question', 'choices', 'answer', 'conceptId']
+          }
+        },
+        thinkingConfig: {
+          thinkingBudget: -1
+        },
+      }
+    });
+
+    return JSON.parse(response.text);
+  } catch (error) {
+    console.error('Error generating comprehensive quiz:', error);
+    return [];
+  }
+};

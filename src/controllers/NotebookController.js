@@ -5,6 +5,72 @@ import admin, { bucket, db } from "../services/firebase.js";
 import { convertImageToPdf, convertTextToPdf } from "../utils/pdfConverter.js";
 import extractContent from "../utils/chunking.js";
 import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, handleChunkEmbeddingAndStorage } from "../utils/utility.js";
+import { handleComprehensiveQuizGeneration } from "../models/models.js";
+
+
+export async function handleGenerateNotebookQuiz(req, res) {
+    const { id: notebookId } = req.params;
+    try {
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+        
+        // 1. Fetch Concept Map
+        const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
+        if (!conceptMapDoc) {
+            return res.status(404).json({ error: 'Concept map not found' });
+        }
+
+        // 2. Select Concepts (Randomly pick up to 10 to avoid token limits)
+        const nodes = conceptMapDoc.data.graphData?.layout?.graph?.nodes || [];
+        if (nodes.length === 0) return res.json({ questions: [] });
+
+        // Shuffle and slice
+        const selectedNodes = nodes.sort(() => 0.5 - Math.random()).slice(0, 10);
+
+        // 3. Prepare Data for AI (Fetch 1 chunk per concept)
+        const conceptsForAi = [];
+        
+        // We need to resolve chunks. To avoid N+1 queries, we'll gather all paths first.
+        // For simplicity in this context, we take the first chunkId of each node.
+        const chunkIdsToFetch = [];
+        const nodeMap = new Map(); // chunkId -> node info
+
+        selectedNodes.forEach(node => {
+            if (node.data.chunkIds && node.data.chunkIds.length > 0) {
+                const targetChunkId = node.data.chunkIds[0];
+                chunkIdsToFetch.push(targetChunkId);
+                nodeMap.set(targetChunkId, { id: node.id, label: node.data.label });
+            }
+        });
+
+        const chunkPaths = chunkIdsToFetch.map(cId => `notebooks/${notebookId}/chunks/${cId}.json`);
+        
+        // Parallel fetch from storage
+        const chunkTexts = await handleBulkChunkRetrieval(chunkPaths);
+
+        chunkTexts.forEach((text, index) => {
+            const cId = chunkIdsToFetch[index];
+            const nodeInfo = nodeMap.get(cId);
+            
+            // Clean text (parse if JSON)
+            let cleanText = typeof text === 'string' ? text : JSON.stringify(text);
+            
+            conceptsForAi.push({
+                conceptId: nodeInfo.id,
+                conceptName: nodeInfo.label,
+                text: cleanText.substring(0, 1000) // Truncate to save context window
+            });
+        });
+
+        // 4. Generate Quiz
+        const quizData = await handleComprehensiveQuizGeneration(conceptsForAi);
+
+        res.json({ questions: quizData });
+
+    } catch (err) {
+        console.error("Error generating notebook quiz:", err);
+        res.status(500).json({ error: 'Failed to generate quiz' });
+    }
+}
 
 // Helper to preprocess files safely
 const preprocessFileForPdfSimple = async (file) => {

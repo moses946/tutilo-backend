@@ -9,7 +9,6 @@ import pLimit from 'p-limit';
 import extractContent from "../utils/chunking.js";
 import { handleComprehensiveQuizGeneration } from "../models/models.js";
 
-
 export async function handleGenerateNotebookQuiz(req, res) {
     const { id: notebookId } = req.params;
     try {

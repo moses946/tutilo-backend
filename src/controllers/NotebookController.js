@@ -16,6 +16,7 @@ export async function handleGenerateNotebookQuiz(req, res) {
         // 1. Fetch Concept Map
         const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
         if (!conceptMapDoc) {
+            console.log(`[QuizGen] Concept Map missing for notebook: ${notebookId}`);
             return res.status(404).json({ error: 'Concept map not found' });
         }
 

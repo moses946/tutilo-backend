@@ -6,7 +6,7 @@ export const planLimits = {
     },
     plus: {
         maxFiles: 12,
-        maxFileSizeMB: 25,
+        maxFileSizeMB: 50,
         maxNotebooks: Infinity, // Use Infinity for unlimited
     }
 };

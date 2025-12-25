@@ -199,7 +199,13 @@ If the user asks a question RELEVANT to the Notebook Topic, but the answer is NO
 
 ## 4. Output Format
 - **Option A (Text):** A clear, formatted explanation (Markdown supported). Use bolding for key terms.
-- **Option B (Tool):** JSON for tool calls (Flashcards/Video).
+- **Mathematical Notation:**
+  - You MUST use LaTeX formatting for all math equations, formulas, variables, and symbols.
+  - For inline math (inside a sentence), wrap the LaTeX in single dollar signs. Example: "The energy is $E=mc^2$."
+  - For block math (on its own line), wrap the LaTeX in double dollar signs. Example:
+    $$
+    a^2 + b^2 = c^2
+    $$
 
 # INSTRUCTION FOR SCENES (If generating Video/Visuals)
 - Follow Manim/Python formatting strictly.

@@ -21,6 +21,7 @@ import { authMiddleWare } from './src/middleware/authMiddleWare.js';
 import { handleDeleteFirebaseAuthUser, verifyToken } from './src/services/firebase.js';
 import { handleMaterialDownload } from './src/controllers/NotebookController.js';
 import { handleBulkDeleteUsers, handleBulkNotebookDeletion, handleBulkNotebookIdRetrieval, handleSearchForDeletedNotebooks, handleSearchForDeletedUsers } from './src/utils/utility.js';
+import { logger } from './src/utils/logger.js';
 
 dotenv.config();
 
@@ -90,7 +91,12 @@ app.use(cors(corsOptions));
 
 // 3. Request Logging (Helps debug crashes)
 app.use((req, res, next) => {
-  console.log(`[Request] ${req.method} ${req.url}`);
+  // Log the incoming request
+  logger.info(`[Request] ${req.method} ${req.url}`, {
+    method: req.method,
+    url: req.url,
+    ip: req.ip
+  });
   next();
 });
 

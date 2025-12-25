@@ -29,7 +29,11 @@ export const authMiddleWare = async(req, res, next)=>{
         let plan = userRef && userRef.subscription ? userRef.subscription : 'free';
         let firstName = userRef && userRef.firstName ? userRef.firstName : '';
         let lastName = userRef && userRef.lastName ? userRef.lastName : '';
-        let learningPreferences = {learningPath:userProfileRef.preferences.learningPath, learningStyle:userProfileRef.preferences.learningStyle}
+        let learningPreferences = {
+            learningPath: userProfileRef.preferences.learningPath, 
+            learningStyle: userProfileRef.preferences.learningStyle, // Can now be array
+            learningContext: userProfileRef.preferences.learningContext || '' // New field
+        }
         req.user = {
             uid:idToken.uid,
             email:idToken.email,

@@ -3,88 +3,167 @@ import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGenera
 import { createChunksQuery, createConceptMapQuery, createMaterialQuery, createNotebookQuery, deleteNotebookQuery, readNotebooksQuery, removeMaterialFromNotebook, updateChunksWithQdrantIds, updateMaterialWithChunks, updateNotebookWithFlashcards, updateNotebookWithMaterials, updateNotebookWithDetailedSummary } from "../models/query.js";
 import admin, { bucket, db } from "../services/firebase.js";
 import { convertImageToPdf, convertTextToPdf } from "../utils/pdfConverter.js";
-import extractPdfText from "../utils/chunking.js";
 import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, handleChunkEmbeddingAndStorage, handleNotebookDetailedSummary } from "../utils/utility.js";
-import extractContent from "../utils/chunking.js";
 import { generateAudio } from "../utils/audioSummaries.js";
 import pLimit from 'p-limit';
+import extractContent from "../utils/chunking.js";
+import { handleComprehensiveQuizGeneration } from "../models/models.js";
 
 
-
-const preprocessFileForPdfSimple = async (file) => {
-    let pdfBuffer;
-    let newFilename = file.originalname;
-    let newMimetype = 'application/pdf';
-
-    if (file.mimetype === 'application/pdf') {
-        pdfBuffer = file.buffer;
-    } else if (file.mimetype.startsWith('image/')) {
-        pdfBuffer = await convertImageToPdf(file.buffer, file.mimetype);
-        newFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
-    } else {
-        // Fallback: Convert text-based formats to PDF so the viewer works
-        // This does a quick extraction just for the PDF visual, NOT for RAG chunks yet
-        try {
-            const chunks = await extractContent(file);
-            const fullText = chunks.map(c => c.text).join('\n\n');
-            pdfBuffer = await convertTextToPdf(fullText);
-            newFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
-        } catch (e) {
-            console.error("Simple PDF conversion failed", e);
-            // Fallback: store original if conversion fails, let background job handle extraction
-            // Note: Viewer might fail for this file until processed
-            return {
-                originalFile: file,
-                pdfBuffer: file.buffer, // Save original
-                newFilename: file.originalname,
-                newMimetype: file.mimetype
-            };
+export async function handleGenerateNotebookQuiz(req, res) {
+    const { id: notebookId } = req.params;
+    try {
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+        
+        // 1. Fetch Concept Map
+        const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
+        if (!conceptMapDoc) {
+            console.log(`[QuizGen] Concept Map missing for notebook: ${notebookId}`);
+            return res.status(404).json({ error: 'Concept map not found' });
         }
-    }
 
-    return {
-        originalFile: file,
-        pdfBuffer,
-        newFilename,
-        newMimetype
-    };
+        // 2. Select Concepts (Randomly pick up to 10 to avoid token limits)
+        const nodes = conceptMapDoc.data.graphData?.layout?.graph?.nodes || [];
+        if (nodes.length === 0) return res.json({ questions: [] });
+
+        // Shuffle and slice
+        const selectedNodes = nodes.sort(() => 0.5 - Math.random()).slice(0, 10);
+
+        // 3. Prepare Data for AI (Fetch 1 chunk per concept)
+        const conceptsForAi = [];
+        
+        // We need to resolve chunks. To avoid N+1 queries, we'll gather all paths first.
+        // For simplicity in this context, we take the first chunkId of each node.
+        const chunkIdsToFetch = [];
+        const nodeMap = new Map(); // chunkId -> node info
+
+        selectedNodes.forEach(node => {
+            if (node.data.chunkIds && node.data.chunkIds.length > 0) {
+                const targetChunkId = node.data.chunkIds[0];
+                chunkIdsToFetch.push(targetChunkId);
+                nodeMap.set(targetChunkId, { id: node.id, label: node.data.label });
+            }
+        });
+
+        const chunkPaths = chunkIdsToFetch.map(cId => `notebooks/${notebookId}/chunks/${cId}.json`);
+        
+        // Parallel fetch from storage
+        const chunkTexts = await handleBulkChunkRetrieval(chunkPaths);
+
+        chunkTexts.forEach((text, index) => {
+            const cId = chunkIdsToFetch[index];
+            const nodeInfo = nodeMap.get(cId);
+            
+            // Clean text (parse if JSON)
+            let cleanText = typeof text === 'string' ? text : JSON.stringify(text);
+            
+            conceptsForAi.push({
+                conceptId: nodeInfo.id,
+                conceptName: nodeInfo.label,
+                text: cleanText.substring(0, 1000) // Truncate to save context window
+            });
+        });
+
+        // 4. Generate Quiz
+        const quizData = await handleComprehensiveQuizGeneration(conceptsForAi);
+
+        res.json({ questions: quizData });
+
+    } catch (err) {
+        console.error("Error generating notebook quiz:", err);
+        res.status(500).json({ error: 'Failed to generate quiz' });
+    }
+}
+
+// Helper to preprocess files safely
+const preprocessFileForPdfSimple = async (file) => {
+    try {
+        let pdfBuffer;
+        let newFilename = file.originalname;
+        let newMimetype = 'application/pdf';
+
+        if (file.mimetype === 'application/pdf') {
+            pdfBuffer = file.buffer;
+        } else if (file.mimetype.startsWith('image/')) {
+            pdfBuffer = await convertImageToPdf(file.buffer, file.mimetype);
+            newFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
+        } else {
+            // Fallback: Convert text-based formats to PDF
+            try {
+                const chunks = await extractContent(file);
+                const fullText = chunks.map(c => c.text).join('\n\n');
+                pdfBuffer = await convertTextToPdf(fullText);
+                newFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
+            } catch (e) {
+                console.error("Simple PDF conversion failed for file:", file.originalname, e);
+                // Return original if conversion fails, don't crash
+                return {
+                    originalFile: file,
+                    pdfBuffer: file.buffer,
+                    newFilename: file.originalname,
+                    newMimetype: file.mimetype
+                };
+            }
+        }
+
+        return {
+            originalFile: file,
+            pdfBuffer,
+            newFilename,
+            newMimetype
+        };
+    } catch (err) {
+        console.error("Critical error in preprocessing:", err);
+        throw err;
+    }
 };
 
 export async function handleNotebookCreation(req, res){
-    const { uid, subscription } = req.user;
-    const limits = planLimits[subscription];
-    
-    // ... Limit check logic (lines 43-57) remains the same ...
-    if (subscription === 'free') {
-        try {
-            const notebooksQuery = db.collection('notebooks').where('userId', '==', uid);
-            const snapshot = await notebooksQuery.count().get();
-            const currentNotebookCount = snapshot.data().count;
-
-            if (currentNotebookCount >= limits.maxNotebooks) {
-                return res.status(403).json({
-                    error: 'Notebook limit reached.',
-                    message: `Your 'free' plan allows a maximum of ${limits.maxNotebooks} notebooks.`
-                });
-            }
-        } catch (dbError) {
-            console.error('Failed to query notebook count:', dbError);
-        }
-    }
-
-    let data = req.body;
-    const files = req.files || [];
-
+    console.log("Starting notebook creation...");
     try {
-        // Create Notebook Document immediately with 'processing' status
+        const { uid, subscription } = req.user;
+        const limits = planLimits[subscription];
+        
+        // 1. Check Limits
+        if (subscription === 'free') {
+            try {
+                // Use the user reference for the query
+                const userRef = db.collection('User').doc(uid);
+                const notebooksQuery = db.collection('Notebook')
+                    .where('userID', '==', userRef)
+                    .where('isDeleted', '==', false);
+                
+                const snapshot = await notebooksQuery.count().get();
+                const currentNotebookCount = snapshot.data().count;
+
+                if (currentNotebookCount >= limits.maxNotebooks) {
+                    return res.status(403).json({
+                        error: 'Notebook limit reached.',
+                        message: `Your 'free' plan allows a maximum of ${limits.maxNotebooks} notebooks.`
+                    });
+                }
+            } catch (dbError) {
+                console.error('Failed to query notebook count:', dbError);
+                // Continue despite count error to avoid blocking user
+            }
+        }
+
+        let data = req.body;
+        const files = req.files || [];
+
+        // 2. Create Notebook Document
         let notebookRef = await createNotebookQuery({ ...data, status: 'processing' });  
         
-        // Preprocess files (Convert images to PDF, etc.)
-        // This is synchronous/await, so large files will take a moment to upload, 
-        // but this is necessary to ensure valid files exist for the background job.
+        // 3. Process Files (Convert to PDF)
         const processedFiles = [];
         for (const file of files) {
-            processedFiles.push(await preprocessFileForPdfSimple(file));
+            try {
+                const result = await preprocessFileForPdfSimple(file);
+                processedFiles.push(result);
+            } catch (e) {
+                console.error(`Failed to preprocess file ${file.originalname}:`, e);
+                // Skip failed file or handle gracefully
+            }
         }
 
         const filesToUpload = processedFiles.map(pf => ({
@@ -94,15 +173,15 @@ export async function handleNotebookCreation(req, res){
             buffer: pf.pdfBuffer
         }));      
         
-        // Upload to Storage
+        // 4. Upload to Storage
         const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
         await handleBulkFileUpload(filesToUpload, noteBookBasePath);
 
-        // Create Material Records
+        // 5. Create Database Records
         const materialRefs = await createMaterialQuery(notebookRef, filesToUpload);
         await updateNotebookWithMaterials(notebookRef, materialRefs);
 
-        // Respond immediately. The Frontend will redirect to NotebookPage, which triggers /process
+        console.log(`Notebook ${notebookRef.id} created successfully.`);
         res.status(201).json({
             notebookId: notebookRef.id,
             status: 'processing',
@@ -110,8 +189,11 @@ export async function handleNotebookCreation(req, res){
         });
 
     } catch (err) {
-        console.error('Notebook creation failed:', err);
-        res.status(500).json({ error: 'Notebook creation failed', details: err.message });
+        console.error('Notebook creation CRITICAL FAILURE:', err);
+        // Ensure we send a JSON response even on crash so CORS headers are applied
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Notebook creation failed', details: err.message });
+        }
     }
 }
 
@@ -263,7 +345,8 @@ export async function handleNotebookProcessing(req, res) {
 
         // Mark completed (even if some files failed, as long as we have *some* content)
         await notebookRef.update({ status: 'completed' });
-        
+        res.json({ status: 'completed', message: 'Processing finished' });
+
     } catch (err) {
         // This catch block now handles only "Catastrophic" errors (DB down, Auth fail, etc.)
         console.error(`[Processing] Critical Failure for ${notebookId}:`, err);
@@ -272,110 +355,6 @@ export async function handleNotebookProcessing(req, res) {
         res.status(500).json({ error: 'Processing failed', details: err.message });
     }
 }
-
-// export async function handleNotebookProcessing(req, res) {
-//     const { id: notebookId } = req.params;
-//     const { subscription } = req.user;
-    
-//     // We do NOT send a response immediately anymore. 
-//     // We keep the request open so Cloud Run keeps the CPU allocated.
-    
-//     try {
-//         const notebookRef = db.collection('Notebook').doc(notebookId);
-//         const notebookSnap = await notebookRef.get();
-        
-//         // Idempotency: If already completed, return success immediately
-//         if (notebookSnap.exists && notebookSnap.data().status === 'completed') {
-//             return res.json({ status: 'completed', message: 'Already processed' });
-//         }
-
-//         const modelLimits = getModelConfig(subscription);
-//         const vectorDim = modelLimits.vectorDim;
-//         const materialRefs = notebookSnap.data().materialRefs || [];
-        
-//         let chunkRefsCombined = [];
-//         let chunksCombined = [];
-
-//         // Process materials
-//         for (const materialRef of materialRefs) {
-//             const materialSnap = await materialRef.get();
-//             if (!materialSnap.exists) continue;
-            
-//             const materialData = materialSnap.data();
-            
-//             // Skip if already chunked
-//             if (materialData.chunkRefs && materialData.chunkRefs.length > 0) continue; 
-
-//             // Retrieve file from storage
-//             const storagePath = `notebooks/${notebookId}/materials/${materialData.storagePath}`;
-//             const fileBuffer = await bucket.file(storagePath).download();
-            
-//             const fileObj = {
-//                 buffer: fileBuffer[0],
-//                 mimetype: 'application/pdf', // Default assumption or store mime in metadata
-//                 originalname: materialData.name
-//             };
-
-//             // Extract & Chunk
-//             const chunks = await extractContent(fileObj);
-//             const chunkRefs = await createChunksQuery(chunks, materialRef);
-            
-//             const chunkBasePath = `notebooks/${notebookId}/chunks`;
-//             const chunkItems = chunks.map((chunk, index) => {
-//                 return { ...chunk, name: chunkRefs[index].id };
-//             })
-            
-//             // Parallelize uploads for speed
-//             await Promise.all([
-//                 handleBulkChunkUpload(chunkItems, chunkBasePath),
-//                 updateMaterialWithChunks(materialRef, chunkRefs)
-//             ]);
-
-//             chunkRefsCombined.push(...chunkRefs);
-//             chunksCombined.push(...chunks);
-
-//             // Embed (this is the heavy part)
-//             const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookId, vectorDim);
-//             await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
-//         }
-
-//         // Generate AI Assets (Mindmap & Flashcards)
-//         if (chunkRefsCombined.length > 0) {
-//             let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
-//             try {
-//                 // Sanitize JSON string if AI added markdown blocks
-//                 if (typeof result === 'string') {
-//                     result = result.replace(/```json/g, '').replace(/```/g, '').trim();
-//                 }
-//                 const parsedResult = JSON.parse(result);
-//                 await notebookRef.update({ summary: parsedResult.summary });
-//                 await createConceptMapQuery(parsedResult, notebookRef);
-//             } catch(e) {
-//                 console.error("Concept map parsing error", e);
-//                 // Don't fail the whole request just for the map
-//             }
-
-//             const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef, modelLimits.flashcardModel);
-//             if (flashcardRef) {
-//                 await updateNotebookWithFlashcards(notebookRef, flashcardRef);
-//             }
-//             const detailedSummary = await handleNotebookDetailedSummary(notebookId);
-//             if (detailedSummary){
-//                 await updateNotebookWithDetailedSummary(notebookRef, detailedSummary);
-//             }
-//         }
-
-//         await notebookRef.update({ status: 'completed' });
-        
-        
-//     } catch (err) {
-//         console.error(`[Processing] Failed for ${notebookId}:`, err);
-//         const notebookRef = db.collection('Notebook').doc(notebookId);
-//         await notebookRef.update({ status: 'failed' }); 
-//         res.status(500).json({ error: 'Processing failed', details: err.message });
-//     }
-// }
-
 
 // [INSERT NEW FUNCTION] Simple status check
 export async function handleNotebookStatus(req, res) {
@@ -388,7 +367,6 @@ export async function handleNotebookStatus(req, res) {
         const data = doc.data();
         res.json({ 
             status: data.status || 'processing',
-            // Send summary if ready, so we can show it immediately upon completion
             summary: data.summary || null 
         });
     } catch (err) {
@@ -400,7 +378,6 @@ export async function handleNotebookStatus(req, res) {
 export async function handleNotebookDeletion(req, res) {
     const { id } = req.params;
     try {
-        // get the notebook reference and update the isDeleted to true then cron job will do the deletion
         let noteookRef = db.collection('Notebook').doc(id)
         await noteookRef.update({ isDeleted: true });
         res.status(200).json({ message: 'Notebook deleted successfully' });
@@ -410,7 +387,6 @@ export async function handleNotebookDeletion(req, res) {
     }
 }
 
-
 export async function handleNotebookUpdate(req, res) {
     try {
         const { id: notebookId } = req.params;
@@ -419,7 +395,6 @@ export async function handleNotebookUpdate(req, res) {
         const files = req.files || [];
         const { deletedMaterialIds: deletedMaterialIdsJson, links: linksJson, texts: textsJson } = req.body;
 
-        // Handle deletions
         if (deletedMaterialIdsJson) {
             const deletedMaterialIds = JSON.parse(deletedMaterialIdsJson);
             if (Array.isArray(deletedMaterialIds) && deletedMaterialIds.length > 0) {
@@ -430,11 +405,10 @@ export async function handleNotebookUpdate(req, res) {
             }
         }
 
-        // Handle new file additions
         if (files.length > 0) {
             const processedFiles = [];
              for (const file of files) {
-                 processedFiles.push(await preprocessFileForPdf(file));
+                 processedFiles.push(await preprocessFileForPdfSimple(file));
              }
  
              const filesToUpload = processedFiles.map(pf => ({
@@ -468,7 +442,6 @@ export async function handleNotebookUpdate(req, res) {
             await updateNotebookWithMaterials(notebookRef, materialRefs);
         }
 
-        // Handle new links and texts
         const links = linksJson ? JSON.parse(linksJson) : [];
         const texts = textsJson ? JSON.parse(textsJson) : [];
 
@@ -504,14 +477,6 @@ export async function handleNotebookUpdate(req, res) {
 export async function handleConceptMapRetrieval(req, res) {
     try {
         const notebookId = req.params.id;
-        if (!notebookId) {
-            return res.status(400).json({
-                error: 'Notebook ID is required',
-                message: 'Please provide a notebook ID in the URL'
-            });
-        }
-
-        // Query the conceptMap collection for the document with this notebookId
         const notebookRef = db.collection('Notebook').doc(notebookId);
         const conceptMapSnapshot = await db
             .collection('ConceptMap')
@@ -526,14 +491,12 @@ export async function handleConceptMapRetrieval(req, res) {
             });
         }
 
-        // There should be only one concept map per notebook
         const conceptMapDoc = conceptMapSnapshot.docs[0];
         const conceptMapData = conceptMapDoc.data();
 
         res.json({
             id: conceptMapDoc.id,
             graph: conceptMapData.graphData.layout.graph,
-            // ...conceptMapData
         });
     } catch (err) {
         console.error('Error retrieving concept map:', err);
@@ -561,8 +524,6 @@ export async function fetchConceptMapDoc(notebookRef) {
         data: conceptMapDoc.data(),
     };
 }
-
-export const normalizeString = (value) => (value || '').toString().trim().toLowerCase();
 
 function buildConceptListing(conceptMapData) {
     if (!conceptMapData?.graphData?.layout) {
@@ -598,7 +559,6 @@ export async function resolveConceptContext({ notebookId, conceptId }) {
     }
     const chunkIds = node.data?.chunkIds || [];
 
-    // OPTIMIZATION: Use getAll for batch retrieval instead of Promise.all mapping
     const chunkRefs = chunkIds.map(id => db.collection('Chunk').doc(id));
     let chunkSnaps = [];
     if (chunkRefs.length > 0) {
@@ -634,15 +594,12 @@ export async function resolveConceptContext({ notebookId, conceptId }) {
         }
     }
 
-    // Retrieve chunk text content from storage at the very end
     const chunkFilePaths = chunks.map(chunk => `notebooks/${notebookId}/chunks/${chunk.chunkId}.json`);
-
     const chunkContents = await handleBulkChunkRetrieval(chunkFilePaths);
 
     chunks.forEach((chunk, index) => {
         chunk.text = chunkContents[index];
     });
-    // Return chunks sorted by page number for logical navigation
     chunks.sort((a, b) => a.pageNumber - b.pageNumber);
 
     const materials = [];
@@ -700,13 +657,6 @@ export async function resolveConceptContext({ notebookId, conceptId }) {
 export async function handleConceptList(req, res) {
     try {
         const { id: notebookId } = req.params;
-        if (!notebookId) {
-            return res.status(400).json({
-                error: 'Notebook ID is required',
-                message: 'Please provide a valid notebook ID',
-            });
-        }
-
         const notebookRef = db.collection('Notebook').doc(notebookId);
         const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
 
@@ -731,26 +681,17 @@ export async function handleConceptList(req, res) {
 export async function handleConceptDetail(req, res) {
     try {
         const { id: notebookId, conceptId } = req.params;
-        if (!notebookId || !conceptId) {
-            return res.status(400).json({
-                error: 'Invalid request',
-                message: 'Notebook ID and concept ID are required',
-            });
-        }
-
         const context = await resolveConceptContext({ notebookId, conceptId });
 
         if (!context) {
             return res.status(404).json({
                 error: 'Concept map not found',
-                message: `No concept map found for notebook ID: ${notebookId}`,
             });
         }
 
         if (!context.exists) {
             return res.status(404).json({
                 error: 'Concept not found',
-                message: `No concept node found with ID: ${conceptId}`,
             });
         }
 
@@ -817,7 +758,6 @@ export async function handleConceptChatCreate(req, res) {
             await chatRef.update({
                 dateUpdated: now,
                 conceptName: conceptContext.conceptName,
-                // conceptSummary: conceptContext.summary || '',
                 referenceMaterials: referenceMaterialsPayload,
                 conceptChunks: conceptContext.chunks,
             });
@@ -830,32 +770,36 @@ export async function handleConceptChatCreate(req, res) {
                 title: conceptContext.conceptName || 'Concept Chat',
                 conceptId,
                 conceptName: conceptContext.conceptName,
-                // conceptSummary: conceptContext.summary || '',
-                // conceptType: 'concept-map',
                 referenceMaterials: referenceMaterialsPayload,
                 conceptChunks: conceptContext.chunks,
             };
 
             chatRef = await db.collection('Chat').add(payload);
+        }
 
-            // Check if a quiz already exists before generating a new one
-            const quizSnapshot = await db.collection('Quizzes')
-                .where('chatID', '==', chatRef)
-                .limit(1)
-                .get();
+        let quizQuestions = [];
+        const quizSnapshot = await db.collection('Quizzes')
+            .where('chatID', '==', chatRef)
+            .limit(1)
+            .get();
 
-            if (quizSnapshot.empty) {
-                // Generate and store the quiz for the concept only if it doesn't exist
-                await handleQuizGeneration(chatRef.id, conceptContext.chunks);
+        if (!quizSnapshot.empty) {
+            quizQuestions = quizSnapshot.docs[0].data().questions;
+        } else {
+            const quizRef = await handleQuizGeneration(chatRef.id, conceptContext.chunks);
+            if (quizRef) {
+                const newQuizDoc = await quizRef.get();
+                quizQuestions = newQuizDoc.data().questions;
             }
         }
+
         res.json({
             chatId: chatRef.id,
             conceptId,
             conceptName: conceptContext.conceptName,
-            // conceptSummary: conceptContext.summary || '',
             references: conceptContext.materials,
             chunks: conceptContext.chunks,
+            quiz: quizQuestions
         });
     } catch (err) {
         console.error('Error creating concept chat:', err);
@@ -869,41 +813,15 @@ export async function handleConceptChatCreate(req, res) {
 export async function handleMaterialDownload(req, res) {
     try {
         const { id: notebookId, materialId } = req.params;
-        if (!notebookId || !materialId) {
-            return res.status(400).json({
-                error: 'Invalid request',
-                message: 'Notebook ID and material ID are required',
-            });
-        }
-
         const materialRef = db.collection('Material').doc(materialId);
         const materialSnap = await materialRef.get();
 
         if (!materialSnap.exists) {
-            return res.status(404).json({
-                error: 'Material not found',
-                message: `No material found with ID: ${materialId}`,
-            });
+            return res.status(404).json({ error: 'Material not found' });
         }
 
         const materialData = materialSnap.data();
-        const notebookRef = db.collection('Notebook').doc(notebookId);
-
-        if (!materialData.notebookID || materialData.notebookID.id !== notebookRef.id) {
-            return res.status(403).json({
-                error: 'Forbidden',
-                message: 'Material does not belong to the specified notebook',
-            });
-        }
-
         const storagePath = materialData.storagePath;
-        if (!storagePath) {
-            return res.status(400).json({
-                error: 'Storage path missing',
-                message: 'Material does not have an associated storage path',
-            });
-        }
-
         const normalizedPath = storagePath.startsWith('notebooks/')
             ? storagePath
             : `notebooks/${notebookId}/materials/${storagePath}`;
@@ -911,10 +829,7 @@ export async function handleMaterialDownload(req, res) {
         const file = bucket.file(normalizedPath);
         const [exists] = await file.exists();
         if (!exists) {
-            return res.status(404).json({
-                error: 'File not found',
-                message: `No file found at path: ${normalizedPath}`,
-            });
+            return res.status(404).json({ error: 'File not found' });
         }
 
         const [metadata] = await file.getMetadata();
@@ -923,61 +838,29 @@ export async function handleMaterialDownload(req, res) {
 
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         const stream = file.createReadStream();
-        stream.on('error', (error) => {
-            console.error('Error streaming material file:', error);
-            if (!res.headersSent) {
-                res.status(500).json({
-                    error: 'Failed to stream material',
-                    message: error.message,
-                });
-            }
-        });
-
         stream.pipe(res);
     } catch (err) {
         console.error('Error downloading material:', err);
-        if (!res.headersSent) {
-            res.status(500).json({
-                error: 'Failed to download material',
-                details: err.message,
-            });
-        }
+        res.status(500).json({ error: 'Failed to download material' });
     }
 }
 
 export async function handleNotebookFetch(req, res) {
     try {
         const { id } = req.params;
-        if (!id) {
-            return res.status(400).json({
-                error: 'Notebook ID is required',
-                message: 'Please provide a valid notebook ID'
-            });
-        }
-
-        // Fetch notebook data
         const notebookRef = db.collection('Notebook').doc(id);
         const notebookSnap = await notebookRef.get();
 
         if (!notebookSnap.exists) {
-            return res.status(404).json({
-                error: 'Notebook not found',
-                message: 'No notebook found with the provided ID'
-            });
+            return res.status(404).json({ error: 'Notebook not found' });
         }
 
         const notebookData = notebookSnap.data();
-
-        // --- INSERT START ---
-        // Resolve Material References
         let materialsData = [];
         if (Array.isArray(notebookData.materialRefs) && notebookData.materialRefs.length > 0) {
             try {
-                // Fetch all referenced material documents
                 const materialSnapshots = await Promise.all(notebookData.materialRefs.map(ref => ref.get()));
-
                 materialsData = materialSnapshots
                     .filter(snap => snap.exists)
                     .map(snap => {
@@ -986,28 +869,21 @@ export async function handleNotebookFetch(req, res) {
                             id: snap.id,
                             name: data.name || data.storagePath || 'Untitled Material',
                             storagePath: data.storagePath,
-                            // Include other fields if necessary
                         };
                     });
             } catch (error) {
                 console.warn("Failed to resolve material refs", error);
             }
         }
-        // --- INSERT END ---
 
-
-        // Fetch concept map data for the notebook
         const [conceptMapSnapshot, flashcardsSnapshot] = await Promise.all([
             db.collection('ConceptMap').where('notebookID', '==', notebookRef).get(),
             db.collection('Flashcard').where('notebookID', '==', notebookRef).get()
         ]);
 
-
         let conceptMapData = null;
         if (!conceptMapSnapshot.empty) {
             conceptMapData = conceptMapSnapshot.docs[0].data();
-
-            // Progress is stored directly on the concept map
             conceptMapData.progress = conceptMapData.progress || {};
         }
 
@@ -1039,12 +915,6 @@ export async function handleNotebookFetch(req, res) {
 export async function handleChunkFetch(req, res) {
     try {
         const { chunkId } = req.params;
-
-        if (!chunkId) {
-            return res.status(400).json({ error: 'Chunk ID is required' });
-        }
-
-        // 1. Get the Chunk Document
         const chunkRef = db.collection('Chunk').doc(chunkId);
         const chunkSnap = await chunkRef.get();
 
@@ -1053,22 +923,10 @@ export async function handleChunkFetch(req, res) {
         }
 
         const chunkData = chunkSnap.data();
-
-        // 2. Get the associated Material Document
-        // The chunk contains a reference to the material
         const materialRef = chunkData.materialID;
-        if (!materialRef) {
-            return res.status(404).json({ error: 'Material reference missing in chunk' });
-        }
-
         const materialSnap = await materialRef.get();
-        if (!materialSnap.exists) {
-            return res.status(404).json({ error: 'Associated material not found' });
-        }
-
         const materialData = materialSnap.data();
 
-        // 3. Return combined metadata needed for navigation
         res.json({
             chunkId: chunkId,
             pageNumber: chunkData.pageNumber,
@@ -1076,7 +934,7 @@ export async function handleChunkFetch(req, res) {
             materialName: materialData.name,
             storagePath: materialData.storagePath,
             tokenCount: chunkData.tokenCount,
-            notebookId: materialData.notebookID?.id // Useful if we need to cross-check context
+            notebookId: materialData.notebookID?.id
         });
 
     } catch (err) {
@@ -1088,21 +946,11 @@ export async function handleChunkFetch(req, res) {
 export async function handleNotebookEditFetch(req, res) {
     try {
         const { id } = req.params;
-        if (!id) {
-            return res.status(400).json({
-                error: 'Notebook ID is required',
-                message: 'Please provide a valid notebook ID'
-            });
-        }
-
         const notebookRef = db.collection('Notebook').doc(id);
         const notebookSnap = await notebookRef.get();
 
         if (!notebookSnap.exists) {
-            return res.status(404).json({
-                error: 'Notebook not found',
-                message: 'No notebook found with the provided ID'
-            });
+            return res.status(404).json({ error: 'Notebook not found' });
         }
 
         const notebookData = notebookSnap.data();
@@ -1141,16 +989,7 @@ export async function handleNotebookEditFetch(req, res) {
 
 export async function handleUserProgressUpdate(req, res) {
     const { id: notebookId, conceptId: nodeId } = req.params;
-    const userId = req.user?.uid; // For authorization
     const progressData = req.body;
-
-    if (!userId) {
-        return res.status(403).json({ error: 'Authentication required.' });
-    }
-
-    if (!progressData || (progressData.isVisited === undefined && progressData.quizStatus === undefined)) {
-        return res.status(400).json({ error: 'Invalid progress data.' });
-    }
 
     try {
         const notebookRef = db.collection('Notebook').doc(notebookId);
@@ -1191,16 +1030,7 @@ export async function handleUserProgressUpdate(req, res) {
 
 export async function handleNotebookRead(req, res) {
     try {
-        // change this later to use req.user
         let userID = req.query.id || req.body.id;
-
-        if (!userID) {
-            return res.status(400).json({
-                error: 'User ID is required',
-                message: 'Please provide user ID as query parameter or in request body'
-            });
-        }
-
         let result = await readNotebooksQuery(userID);
         res.json(result);
     } catch (err) {

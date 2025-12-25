@@ -22,6 +22,12 @@ export const handleUpdateUser = async (req, res) => {
         if (updates.phoneNumber !== undefined) profileUpdates.phoneNumber = updates.phoneNumber;
         if (updates.dateOfBirth !== undefined) profileUpdates.dateOfBirth = updates.dateOfBirth;
 
+        if (updates.learningContext !== undefined) {
+            // We need to use dot notation for nested field updates in Firestore to avoid overwriting the whole map
+            profileUpdates['preferences.learningContext'] = updates.learningContext;
+        }
+
+
         if (Object.keys(profileUpdates).length > 0) {
             // Find the profile document linked to this user
             const profileQuery = await db.collection('UserProfile')

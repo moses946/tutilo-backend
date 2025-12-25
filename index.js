@@ -22,6 +22,7 @@ import { authMiddleWare } from './src/middleware/authMiddleWare.js';
 import { handleDeleteFirebaseAuthUser, verifyToken } from './src/services/firebase.js';
 import { handleMaterialDownload } from './src/controllers/NotebookController.js';
 import { handleBulkDeleteUsers, handleBulkNotebookDeletion, handleBulkNotebookIdRetrieval, handleSearchForDeletedNotebooks, handleSearchForDeletedUsers } from './src/utils/utility.js';
+import { logger } from './src/utils/logger.js';
 
 dotenv.config();
 
@@ -66,8 +67,7 @@ const allowedOrigins = [
   'http://localhost:5173',           // Vite dev server
   'http://localhost:5174',           // Alternative Vite port
   'https://tutilo-beta.web.app',  
-  'https://tutilo-beta.firebaseapp.com'   // Production frontend (no trailing slash)
-  // Add more allowed origins here
+  'https://tutilo-beta.firebaseapp.com'   // Production frontend
 ];
 
 const corsOptions = {
@@ -78,16 +78,29 @@ const corsOptions = {
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      console.log(`[CORS Blocked] Origin: ${origin}`); // Log blocked origins
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true, // If you need to support cookies/auth headers
+  credentials: true, 
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
-// Apply CORS to all routes and make sure preflight (OPTIONS) requests are handled
+// 1. Apply CORS immediately
 app.use(cors(corsOptions));
+
+// 3. Request Logging (Helps debug crashes)
+app.use((req, res, next) => {
+  // Log the incoming request
+  logger.info(`[Request] ${req.method} ${req.url}`, {
+    method: req.method,
+    url: req.url,
+    ip: req.ip
+  });
+  next();
+});
+
 app.use(express.json());
 
 // Routes

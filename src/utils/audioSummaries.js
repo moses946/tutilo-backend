@@ -65,7 +65,10 @@ export const generateAudio = async (text) => {
             process.env.AZURE_SPEECH_KEY, 
             process.env.AZURE_SPEECH_REGION
         );
-        speechConfig.speechSynthesisVoiceName = "en-US-AndrewMultilingualNeural"; 
+        // speechConfig.speechSynthesisVoiceName = "en-US-AndrewMultilingualNeural"; 
+        speechConfig.speechSynthesisVoiceName = "en-US-Bree:DragonHDLatestNeural"; 
+        // speechConfig.speechSynthesisVoiceName = "en-US-Serena:DragonHDLatestNeural"; 
+
         speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3;
 
         // 1. Chunk the text

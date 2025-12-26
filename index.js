@@ -22,6 +22,7 @@ import { handleDeleteFirebaseAuthUser, verifyToken } from './src/services/fireba
 import { handleMaterialDownload } from './src/controllers/NotebookController.js';
 import { handleBulkDeleteUsers, handleBulkNotebookDeletion, handleBulkNotebookIdRetrieval, handleSearchForDeletedNotebooks, handleSearchForDeletedUsers } from './src/utils/utility.js';
 import { logger } from './src/utils/logger.js';
+import { handleLiveSession } from './src/services/liveSession.js';
 
 dotenv.config();
 
@@ -38,9 +39,19 @@ wss.on('connection', async (ws, req) => {
   try {
     const parsedUrl = url.parse(req.url, true);
     token = parsedUrl.query?.token;
+    
+    const mode = parsedUrl.query?.mode;
+    const notebookId = parsedUrl.query?.notebookId;
+
+
     if (!token) throw new Error('No token parameter');
     const decoded = await verifyToken(token);
     if (!decoded) throw new Error('Unauthorized user');
+    
+    if (mode === 'live' && notebookId) {
+      await handleLiveSession(ws, req, decoded, notebookId);
+      return; // Exit main handler, live session takes over this socket
+    }
 
     let socketsSet = clientSocketsMap.get(decoded.uid) || new Set();
     socketsSet.add(ws);

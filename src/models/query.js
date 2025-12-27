@@ -437,7 +437,8 @@ export const createUserQuery = async (data)=>{
     if (existingProfiles.empty) {
         // Create UserProfile document only if none exists
         const onboardingData = data.onboardingData || {};
-        const userProfileRef = await db.collection('UserProfile').add({
+        const userProfileRef = db.collection('UserProfile').doc(data.uid);
+        await userProfileRef.set({
             dateOfBirth: onboardingData.dateOfBirth || null,
             educationLevel: onboardingData.educationLevel || null,
             location: onboardingData.location || null,

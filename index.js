@@ -144,7 +144,7 @@ cron.schedule('* * * * *', async () => {
 let isJobRunning = false;
 const MAX_BATCHES = 100; // Safety: Stop after processing ~20,000 users to prevent infinite loops
 
-cron.schedule('0 3 * * *', async () => {
+cron.schedule('0 * * * *', async () => {
   if (isJobRunning) {
     console.log("Previous deletion job still running. Skipping.");
     return;

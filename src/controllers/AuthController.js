@@ -62,6 +62,13 @@ export async function handleLogin(req, res){
         // Fetch user document first to calculate streak
         let userDoc = await userRef.get();
         let userData = userDoc.data();
+
+        if (userData && userData.isDeleted) {
+            return res.status(403).json({ 
+                error: 'Account deleted', 
+                message: 'This account has been scheduled for deletion.' 
+            });
+        }
         
         let currentStreak = userData && userData.streak ? userData.streak : 0;
         let lastLogin = userData && userData.lastLogin ? userData.lastLogin.toDate() : null;

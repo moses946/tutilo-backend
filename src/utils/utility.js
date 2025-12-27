@@ -354,12 +354,35 @@ export const handleSendToVideoGen = async (data)=>{
     return response
 }
 
+
+export const logTokenUsage = async (userId, model, usageMetadata, feature) => {
+    if (!userId || !usageMetadata) return;
+    
+    const inputTokens = usageMetadata.promptTokenCount || 0;
+    const outputTokens = usageMetadata.candidatesTokenCount || 0;
+    const totalTokens = usageMetadata.totalTokenCount || (inputTokens + outputTokens);
+
+    try {
+        await db.collection('TokenUsage').add({
+            userId,
+            model,
+            inputTokens,
+            outputTokens,
+            totalTokens,
+            feature,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+    } catch (err) {
+        console.error('[TokenLogging] Failed to log usage:', err);
+    }
+}
+
 /*
   Generate a detailed summary of a notebook by accessing all chunks
   Input: notebookId: string
   Output: string - A comprehensive summary explaining every concept present in the notebook
 */
-export const handleNotebookDetailedSummary = async (notebookId) => {
+export const handleNotebookDetailedSummary = async (notebookId, userId) => {
     try {
         // 1. Get the notebook document
         const notebookRef = db.collection('Notebook').doc(notebookId);
@@ -369,6 +392,7 @@ export const handleNotebookDetailedSummary = async (notebookId) => {
             throw new Error(`Notebook with ID ${notebookId} not found`);
         }
 
+        // ... [EXISTING CODE: materialRefs logic, chunk collection, retrieval] ...
         const notebookData = notebookSnap.data();
         const materialRefs = notebookData.materialRefs || [];
 
@@ -376,11 +400,9 @@ export const handleNotebookDetailedSummary = async (notebookId) => {
             return 'This notebook does not contain any materials yet.';
         }
 
-        // 2. Collect all chunk references from all materials
         const allChunkRefs = [];
         const chunkMetadata = [];
 
-        // Fetch all materials in parallel for better performance
         const materialSnaps = await Promise.all(materialRefs.map(ref => ref.get()));
         
         for (let i = 0; i < materialSnaps.length; i++) {
@@ -390,7 +412,6 @@ export const handleNotebookDetailedSummary = async (notebookId) => {
             const materialData = materialSnap.data();
             const chunkRefs = materialData.chunkRefs || [];
 
-            // Get chunk documents to retrieve metadata
             if (chunkRefs.length > 0) {
                 const chunkSnaps = await db.getAll(...chunkRefs);
                 chunkSnaps.forEach((chunkSnap, index) => {
@@ -411,22 +432,17 @@ export const handleNotebookDetailedSummary = async (notebookId) => {
             return 'This notebook does not contain any processed chunks yet.';
         }
 
-        // 3. Retrieve all chunk texts from storage
         const chunkBasePath = `notebooks/${notebookId}/chunks/`;
         const chunkPaths = allChunkRefs.map(chunkRef => `${chunkBasePath}${chunkRef.id}.json`);
         
         const chunkContents = await handleBulkChunkRetrieval(chunkPaths);
 
-        // 4. Format chunks with metadata for the AI model
-        // Combine chunk text with metadata for better context
         const formattedChunks = chunkContents.map((chunkContent, index) => {
             const metadata = chunkMetadata[index];
-            // Handle different chunk content formats
             let text;
             if (typeof chunkContent === 'string') {
                 text = chunkContent;
             } else if (typeof chunkContent === 'object' && chunkContent !== null) {
-                // If it's an object, try to extract text property or stringify
                 text = chunkContent.text || chunkContent.content || JSON.stringify(chunkContent);
             } else {
                 text = String(chunkContent);
@@ -434,10 +450,8 @@ export const handleNotebookDetailedSummary = async (notebookId) => {
             return `[Material: ${metadata.materialName}, Page: ${metadata.pageNumber || 'N/A'}]\n${text}`;
         });
 
-        // Combine all chunks into a single text for processing
         const allChunksText = formattedChunks.join('\n\n---\n\n');
 
-        // 5. Generate detailed summary using AI model
         const summaryPrompt = `
         **TASK:** Synthesize the provided notebook content into a comprehensive, spoken-word lecture script. 
         The content consists of multiple chunks; you must weave them into a single, cohesive narrative without redundancy.
@@ -471,8 +485,7 @@ export const handleNotebookDetailedSummary = async (notebookId) => {
 
         **Generate the lecture script now:**
         `;
-        // Define the System Instruction (The Persona)
-        // This sets the behavior for the entire interaction
+        
         const systemInstruction = {
             role: 'system',
             parts: [{ 
@@ -483,24 +496,28 @@ export const handleNotebookDetailedSummary = async (notebookId) => {
             }]
         };
 
-        // Define the Generation Config (The Settings)
         const generationConfig = {
-            temperature: 0.3, // Lowered for factual consistency
+            temperature: 0.3,
             topP: 0.95,
             topK: 40,
-            maxOutputTokens: 8192, // Ensure enough space for long summaries
+            maxOutputTokens: 8192,
         };
 
-        // Make the Call
+        const modelName = 'gemini-2.5-flash';
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash', 
-            systemInstruction: systemInstruction, // Moved out of config
-            generationConfig: generationConfig,   // Renamed for clarity
+            model: modelName, 
+            systemInstruction: systemInstruction,
+            generationConfig: generationConfig,
             contents: [{ 
                 role: 'user', 
                 parts: [{ text: summaryPrompt }] 
             }]
         });
+
+        // [INSERT] Log token usage
+        if (userId) {
+            await logTokenUsage(userId, modelName, response.usageMetadata, 'notebook_detailed_summary');
+        }
 
         const summary = response.text || 'Unable to generate summary.';
         return summary;

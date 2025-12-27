@@ -2,7 +2,7 @@ import express from 'express';
 import {upload} from '../utils/utility.js'
 import { planLimits } from '../config/plans.js';
 
-import { handleConceptChatCreate, handleConceptDetail, handleConceptList, handleConceptMapRetrieval, handleMaterialDownload, handleNotebookCreation, handleNotebookDeletion, handleNotebookEditFetch, handleNotebookFetch, handleNotebookRead, handleNotebookUpdate, handleUserProgressUpdate, handleChunkFetch, handleNotebookStatus, handleNotebookProcessing, handleAudioGeneration, handleGenerateNotebookQuiz} from '../controllers/NotebookController.js';
+import { handleConceptChatCreate, handleConceptDetail, handleConceptList, handleLastViewedUpdate, handleConceptMapRetrieval, handleMaterialDownload, handleNotebookCreation, handleNotebookDeletion, handleNotebookEditFetch, handleNotebookFetch, handleNotebookRead, handleNotebookUpdate, handleUserProgressUpdate, handleChunkFetch, handleNotebookStatus, handleNotebookProcessing, handleAudioGeneration, handleGenerateNotebookQuiz} from '../controllers/NotebookController.js';
 
 // Helper to convert MB to bytes
 const MB_TO_BYTES = (mb) => mb * 1024 * 1024;
@@ -58,9 +58,10 @@ notebookRouter.get('/:id/conceptMap', handleConceptMapRetrieval);
 notebookRouter.get('/:id/concepts', handleConceptList);
 notebookRouter.get('/:id/concepts/:conceptId', handleConceptDetail);
 notebookRouter.post('/:id/concepts/:conceptId/chat', handleConceptChatCreate);
-notebookRouter.get('/:id/quiz/comprehensive', handleGenerateNotebookQuiz);
+notebookRouter.post('/:id/quiz/comprehensive', handleGenerateNotebookQuiz);
 notebookRouter.get('/:id/materials/:materialId/download', handleMaterialDownload);
 notebookRouter.put('/:id/concepts/:conceptId/progress', handleUserProgressUpdate);
 notebookRouter.get('/chunks/:chunkId', handleChunkFetch); 
 notebookRouter.post('/audio', handleAudioGeneration);
+notebookRouter.post('/lastViewed', handleLastViewedUpdate);
 export default notebookRouter

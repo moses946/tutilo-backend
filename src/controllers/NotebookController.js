@@ -12,6 +12,7 @@ import { handleComprehensiveQuizGeneration } from "../models/models.js";
 export async function handleGenerateNotebookQuiz(req, res) {
     const { id: notebookId } = req.params;
     try {
+        const {numberOfQuestions, difficultyLevel} = req.body;
         const notebookRef = db.collection('Notebook').doc(notebookId);
         
         // 1. Fetch Concept Map
@@ -64,7 +65,7 @@ export async function handleGenerateNotebookQuiz(req, res) {
         });
 
         // 4. Generate Quiz
-        const quizData = await handleComprehensiveQuizGeneration(conceptsForAi);
+        const quizData = await handleComprehensiveQuizGeneration(conceptsForAi, numberOfQuestions, difficultyLevel);
 
         res.json({ questions: quizData });
 
@@ -524,22 +525,6 @@ export async function fetchConceptMapDoc(notebookRef) {
     };
 }
 
-function buildConceptListing(conceptMapData) {
-    if (!conceptMapData?.graphData?.layout) {
-        return [];
-    }
-
-    const graphNodes = conceptMapData.graphData.layout?.graph?.nodes || [];
-
-    return graphNodes.map((node) => {
-        return {
-            conceptId: node.id,
-            conceptName: node.data?.label || node.label || node.id,
-            chunkIds: node.data?.chunkIds || [],
-        };
-    });
-}
-
 export async function resolveConceptContext({ notebookId, conceptId }) {
     const notebookRef = db.collection('Notebook').doc(notebookId);
     const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
@@ -653,6 +638,25 @@ export async function resolveConceptContext({ notebookId, conceptId }) {
     };
 }
 
+// Helper function
+function buildConceptListing(conceptMapData) {
+    if (!conceptMapData?.graphData?.layout) {
+        return [];
+    }
+
+    const graphNodes = conceptMapData.graphData.layout?.graph?.nodes || [];
+
+    return graphNodes.map((node) => {
+        return {
+            conceptId: node.id,
+            conceptName: node.data?.label || node.label || node.id,
+            chunkIds: node.data?.chunkIds || [],
+            // We will populate 'references' in the main handler below
+            references: [] 
+        };
+    });
+}
+
 export async function handleConceptList(req, res) {
     try {
         const { id: notebookId } = req.params;
@@ -666,8 +670,61 @@ export async function handleConceptList(req, res) {
             });
         }
 
+        // 1. Get the basic list (IDs only)
         const concepts = buildConceptListing(conceptMapDoc.data);
+
+        // 2. [NEW] Hydrate references for every concept
+        // We use Promise.all to fetch details for all concepts in parallel
+        await Promise.all(concepts.map(async (concept) => {
+            if (concept.chunkIds && concept.chunkIds.length > 0) {
+                try {
+                    // A. Fetch all chunk documents for this concept
+                    const chunkSnapshots = await Promise.all(
+                        concept.chunkIds.map(chunkId => db.collection('Chunk').doc(chunkId).get())
+                    );
+
+                    // B. Filter out chunks that might have been deleted
+                    const validChunks = chunkSnapshots
+                        .filter(snap => snap.exists)
+                        .map(snap => ({ id: snap.id, ...snap.data() }));
+
+                    // C. Group chunks by Material ID
+                    const referencesMap = {};
+                    
+                    validChunks.forEach(chunk => {
+                        // Handle materialID being a reference or a string
+                        const matId = chunk.materialID?.id || chunk.materialID; 
+                        
+                        if (!matId) return;
+
+                        if (!referencesMap[matId]) {
+                            referencesMap[matId] = {
+                                materialId: matId,
+                                chunks: []
+                            };
+                        }
+
+                        // PUSH THE CRITICAL PAGE DATA HERE
+                        referencesMap[matId].chunks.push({
+                            chunkId: chunk.id,
+                            pageNumber: Number(chunk.pageNumber), // Ensure this is a Number
+                            tokenCount: chunk.tokenCount
+                        });
+                    });
+
+                    // D. Assign the grouped structure to the concept
+                    concept.references = Object.values(referencesMap);
+
+                } catch (err) {
+                    console.warn(`Failed to resolve references for concept ${concept.conceptId}:`, err);
+                    concept.references = [];
+                }
+            }
+        }));
+
+        // 3. Send the hydrated list
         res.json({ concepts });
+
     } catch (err) {
         console.error('Error retrieving concept list:', err);
         res.status(500).json({
@@ -1073,11 +1130,10 @@ export async function handleAudioGeneration(req, res) {
 
         // 5. Persist the URL to the Notebook Document in Firestore
         const notebookRef = db.collection('Notebook').doc(notebookId);
-        const timestamp = new Date().toISOString();
         
         await notebookRef.set({
             audio_url: url,
-            audio_generated_at: timestamp
+            audio_generated_at: admin.firestore.FieldValue.serverTimestamp() 
         }, { merge: true });
 
         // 6. Send the Audio Buffer back to the client
@@ -1085,7 +1141,6 @@ export async function handleAudioGeneration(req, res) {
             'Access-Control-Expose-Headers': 'X-Audio-Url, X-Audio-Timestamp',            'Content-Type': 'audio/mpeg',
             'Content-Length': audioBuffer.length,
             'X-Audio-Url': url,
-            'X-Audio-Timestamp': timestamp
         });
         
         res.send(audioBuffer);
@@ -1096,5 +1151,25 @@ export async function handleAudioGeneration(req, res) {
             error: 'Failed to generate audio',
             details: err.message
         });
+    }
+}
+
+
+export const handleLastViewedUpdate = async (req, res) =>{
+    try{
+        console.log("Hit endpoint now");
+        const notebookId = req.body.id;
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+
+        await notebookRef.set({
+            dateUpdated: admin.firestore.FieldValue.serverTimestamp() 
+        }, {merge: true})
+
+        res.status(200);
+    } catch (err){
+        res.status(500).json({
+            error: `Failed to update server`,
+            details: err.message
+        })
     }
 }

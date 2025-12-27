@@ -554,7 +554,7 @@ export async function agentLoop(userId, chatObj, chatRef, message = [], summary 
 
 }
 
-export const handleComprehensiveQuizGeneration = async (conceptsWithChunks) => {
+export const handleComprehensiveQuizGeneration = async (conceptsWithChunks, numberOfQuestions = 10, difficultyLevel = 'medium') => {
   try {
     // conceptsWithChunks is array of { conceptId: string, conceptName: string, text: string }
     const contextString = conceptsWithChunks.map(c => 
@@ -562,23 +562,33 @@ export const handleComprehensiveQuizGeneration = async (conceptsWithChunks) => {
     ).join('\n\n');
 
     const prompt = `
-    Generate a multiple-choice quiz based on the provided concepts.
-    
-    INPUT CONTEXT:
-    ${contextString}
+Generate a multiple-choice quiz based on the provided concepts, strictly adhering to the specified difficulty and quantity constraints.
 
-    RULES:
-    1. Generate at least one question per CONCEPT_ID provided.If you deem a concept requires more than one question, then ask more
-    2. The Output must be a valid JSON array.
-    3. Each object must strictly follow this structure:
-       {
-         "question": "string",
-         "choices": ["A", "B", "C", "D"],
-         "answer": "The correct choice string",
-         "conceptId": "The exact CONCEPT_ID from input"
-       }
-    4. Ensure the question tests understanding of the specific content provided for that concept.
-    `;
+INPUT DATA:
+   - CONTEXT: ${contextString}
+   - TARGET_DIFFICULTY: ${difficultyLevel}
+   - TARGET_QUESTION_COUNT: ${numberOfQuestions}
+
+DIFFICULTY GUIDELINES:
+   - If TARGET_DIFFICULTY is "Easy": Focus on direct recall, definitions, and basic identification of facts found explicitly in the text.
+   - If TARGET_DIFFICULTY is "Medium": Focus on application, interpretation, and connecting two related ideas within the text.
+   - If TARGET_DIFFICULTY is "Hard": Focus on analysis, edge cases, inference, and "best fit" scenarios where distractors are plausible but incorrect.
+
+RULES:
+   1. Concept Coverage: Ideally, generate at least one question per CONCEPT_ID. 
+      - If TARGET_QUESTION_COUNT is less than the number of concepts, prioritize the most information-dense concepts. 
+      - If TARGET_QUESTION_COUNT allows, generate multiple questions for complex concepts to reach the target.
+   2. Quantity Control: The output array must contain exactly ${numberOfQuestions} items.
+   3. Output Format: Return ONLY a valid JSON array. Do not include Markdown formatting or conversational text.
+   4. JSON Structure: Each object in the array must strictly follow this schema:
+      {
+         "question": "The question string",
+         "choices": ["Option A", "Option B", "Option C", "Option D"],
+         "answer": "The exact string of the correct choice",
+         "conceptId": "The exact CONCEPT_ID this question tests"
+      }
+   5. Distractor Quality: Ensure incorrect choices (distractors) are relevant to the context but clearly wrong based on the TARGET_DIFFICULTY.
+`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-lite',

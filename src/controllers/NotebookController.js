@@ -14,9 +14,9 @@ export async function handleGenerateNotebookQuiz(req, res) {
     const userId = req.user.uid; // Get ID from middleware
 
     try {
-        const {numberOfQuestions, difficultyLevel} = req.body;
+        const { numberOfQuestions, difficultyLevel } = req.body;
         const notebookRef = db.collection('Notebook').doc(notebookId);
-        
+
         // ... [EXISTING CODE: Fetch Concept Map, Select Concepts, Prepare Data] ...
         const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
         if (!conceptMapDoc) {
@@ -48,7 +48,7 @@ export async function handleGenerateNotebookQuiz(req, res) {
             const cId = chunkIdsToFetch[index];
             const nodeInfo = nodeMap.get(cId);
             let cleanText = typeof text === 'string' ? text : JSON.stringify(text);
-            
+
             conceptsForAi.push({
                 conceptId: nodeInfo.id,
                 conceptName: nodeInfo.label,
@@ -58,7 +58,7 @@ export async function handleGenerateNotebookQuiz(req, res) {
 
         // 4. Generate Quiz
         const quizData = await handleComprehensiveQuizGeneration(conceptsForAi, userId, numberOfQuestions, difficultyLevel);
-   
+
         res.json({ questions: quizData });
 
     } catch (err) {
@@ -76,7 +76,19 @@ const preprocessFileForPdfSimple = async (file) => {
         if (file.mimetype === 'application/pdf') {
             pdfBuffer = file.buffer;
         } else if (file.mimetype.startsWith('image/')) {
-            pdfBuffer = await convertImageToPdf(file.buffer, file.mimetype);
+            let extractedText = '';
+            try {
+                const chunks = await extractContent(file);
+                if (chunks && chunks.length > 0) {
+                    extractedText = chunks.map(c => c.text).join('\n');
+                }
+            } catch (err) {
+                console.warn(`Pre-PDF image extraction failed for ${file.originalname}:`, err.message);
+                // Continue without text if extraction fails
+            }
+
+
+            pdfBuffer = await convertImageToPdf(file.buffer, file.mimetype, extractedText);
             newFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
         } else {
             // Fallback: Convert text-based formats to PDF
@@ -109,12 +121,12 @@ const preprocessFileForPdfSimple = async (file) => {
     }
 };
 
-export async function handleNotebookCreation(req, res){
+export async function handleNotebookCreation(req, res) {
     console.log("Starting notebook creation...");
     try {
         const { uid, subscription } = req.user;
         const limits = planLimits[subscription];
-        
+
         // 1. Check Limits
         if (subscription === 'free') {
             try {
@@ -123,7 +135,7 @@ export async function handleNotebookCreation(req, res){
                 const notebooksQuery = db.collection('Notebook')
                     .where('userID', '==', userRef)
                     .where('isDeleted', '==', false);
-                
+
                 const snapshot = await notebooksQuery.count().get();
                 const currentNotebookCount = snapshot.data().count;
 
@@ -143,8 +155,8 @@ export async function handleNotebookCreation(req, res){
         const files = req.files || [];
 
         // 2. Create Notebook Document
-        let notebookRef = await createNotebookQuery({ ...data, status: 'processing' });  
-        
+        let notebookRef = await createNotebookQuery({ ...data, status: 'processing' });
+
         // 3. Process Files (Convert to PDF)
         const processedFiles = [];
         for (const file of files) {
@@ -159,11 +171,11 @@ export async function handleNotebookCreation(req, res){
 
         const filesToUpload = processedFiles.map(pf => ({
             ...pf.originalFile,
-            originalname: pf.newFilename, 
+            originalname: pf.newFilename,
             mimetype: pf.newMimetype,
             buffer: pf.pdfBuffer
-        }));      
-        
+        }));
+
         // 4. Upload to Storage
         const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
         await handleBulkFileUpload(filesToUpload, noteBookBasePath);
@@ -191,7 +203,7 @@ export async function handleNotebookCreation(req, res){
 export async function handleNotebookProcessing(req, res) {
     const { id: notebookId } = req.params;
     const { subscription, uid } = req.user; // Ensure uid is extracted
-    
+
     // ... [EXISTING CODE: setup, material processing] ...
     const limit = pLimit(3);
 
@@ -216,13 +228,13 @@ export async function handleNotebookProcessing(req, res) {
                     const materialSnap = await materialRef.get();
                     if (!materialSnap.exists) return { success: false, reason: 'Material not found' };
                     const materialData = materialSnap.data();
-                    if (materialData.chunkRefs && materialData.chunkRefs.length > 0) return { success: true, skipped: true }; 
+                    if (materialData.chunkRefs && materialData.chunkRefs.length > 0) return { success: true, skipped: true };
 
                     const storagePath = `notebooks/${notebookId}/materials/${materialData.storagePath}`;
                     const fileBuffer = await bucket.file(storagePath).download();
                     const fileObj = {
                         buffer: fileBuffer[0],
-                        mimetype: 'application/pdf', 
+                        mimetype: 'application/pdf',
                         originalname: materialData.name
                     };
                     const chunks = await extractContent(fileObj);
@@ -231,7 +243,7 @@ export async function handleNotebookProcessing(req, res) {
                     const chunkRefs = await createChunksQuery(chunks, materialRef);
                     const chunkBasePath = `notebooks/${notebookId}/chunks`;
                     const chunkItems = chunks.map((chunk, index) => ({ ...chunk, name: chunkRefs[index].id }));
-                    
+
                     await Promise.all([
                         handleBulkChunkUpload(chunkItems, chunkBasePath),
                         updateMaterialWithChunks(materialRef, chunkRefs)
@@ -267,7 +279,7 @@ export async function handleNotebookProcessing(req, res) {
 
         // --- 2. ROBUST AI ASSET GENERATION ---
         if (chunkRefsCombined.length > 0) {
-            
+
             const conceptMapTask = async () => {
                 // [MODIFIED CALL]
                 let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined, uid);
@@ -292,7 +304,7 @@ export async function handleNotebookProcessing(req, res) {
             const detailedSummaryTask = async () => {
                 // [MODIFIED CALL]
                 const detailedSummary = await handleNotebookDetailedSummary(notebookId, uid);
-                if (detailedSummary){
+                if (detailedSummary) {
                     await updateNotebookWithDetailedSummary(notebookRef, detailedSummary);
                 }
             };
@@ -302,7 +314,7 @@ export async function handleNotebookProcessing(req, res) {
                 flashcardsTask(),
                 detailedSummaryTask()
             ]);
-            
+
             // ... logging ...
         }
 
@@ -312,7 +324,7 @@ export async function handleNotebookProcessing(req, res) {
     } catch (err) {
         console.error(`[Processing] Critical Failure for ${notebookId}:`, err);
         const notebookRef = db.collection('Notebook').doc(notebookId);
-        await notebookRef.update({ status: 'failed', error: 'System error during processing.' }); 
+        await notebookRef.update({ status: 'failed', error: 'System error during processing.' });
         res.status(500).json({ error: 'Processing failed', details: err.message });
     }
 }
@@ -324,11 +336,11 @@ export async function handleNotebookStatus(req, res) {
         const notebookRef = db.collection('Notebook').doc(id);
         const doc = await notebookRef.get();
         if (!doc.exists) return res.status(404).json({ error: 'Not found' });
-        
+
         const data = doc.data();
-        res.json({ 
+        res.json({
             status: data.status || 'processing',
-            summary: data.summary || null 
+            summary: data.summary || null
         });
     } catch (err) {
         console.error("Status check failed:", err);
@@ -344,7 +356,7 @@ export async function handleNotebookDeletion(req, res) {
         res.status(200).json({ message: 'Notebook deleted successfully' });
     } catch (err) {
         console.error('Notebook deletion failed:', err);
-        res.status(500).json({error: 'Notebook deletion failed'});
+        res.status(500).json({ error: 'Notebook deletion failed' });
     }
 }
 
@@ -368,22 +380,22 @@ export async function handleNotebookUpdate(req, res) {
 
         if (files.length > 0) {
             const processedFiles = [];
-             for (const file of files) {
-                 processedFiles.push(await preprocessFileForPdfSimple(file));
-             }
- 
-             const filesToUpload = processedFiles.map(pf => ({
-                 ...pf.originalFile,
-                 originalname: pf.newFilename,
-                 mimetype: pf.newMimetype,
-                 buffer: pf.pdfBuffer
-             }));
+            for (const file of files) {
+                processedFiles.push(await preprocessFileForPdfSimple(file));
+            }
+
+            const filesToUpload = processedFiles.map(pf => ({
+                ...pf.originalFile,
+                originalname: pf.newFilename,
+                mimetype: pf.newMimetype,
+                buffer: pf.pdfBuffer
+            }));
             const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
             await handleBulkFileUpload(files, noteBookBasePath);
             const materialRefs = await createMaterialQuery(notebookRef, filesToUpload);
             let newChunkRefsCombined = [];
             let newChunksCombined = [];
-            
+
             for (let i = 0; i < filesToUpload.length; i++) {
                 const file = filesToUpload[i];
                 const materialRef = materialRefs[i];
@@ -613,7 +625,7 @@ function buildConceptListing(conceptMapData) {
             conceptName: node.data?.label || node.label || node.id,
             chunkIds: node.data?.chunkIds || [],
             // We will populate 'references' in the main handler below
-            references: [] 
+            references: []
         };
     });
 }
@@ -651,11 +663,11 @@ export async function handleConceptList(req, res) {
 
                     // C. Group chunks by Material ID
                     const referencesMap = {};
-                    
+
                     validChunks.forEach(chunk => {
                         // Handle materialID being a reference or a string
-                        const matId = chunk.materialID?.id || chunk.materialID; 
-                        
+                        const matId = chunk.materialID?.id || chunk.materialID;
+
                         if (!matId) return;
 
                         if (!referencesMap[matId]) {
@@ -1038,7 +1050,7 @@ export async function handleNotebookRead(req, res) {
 }
 
 export async function handleAudioGeneration(req, res) {
-    
+
     try {
         if (!req.body || !req.body.text && !req.body.notebookId) {
             return res.status(400).json({
@@ -1070,19 +1082,19 @@ export async function handleAudioGeneration(req, res) {
 
         // 5. Persist the URL to the Notebook Document in Firestore
         const notebookRef = db.collection('Notebook').doc(notebookId);
-        
+
         await notebookRef.set({
             audio_url: url,
-            audio_generated_at: admin.firestore.FieldValue.serverTimestamp() 
+            audio_generated_at: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
 
         // 6. Send the Audio Buffer back to the client
         res.set({
-            'Access-Control-Expose-Headers': 'X-Audio-Url, X-Audio-Timestamp',            'Content-Type': 'audio/mpeg',
+            'Access-Control-Expose-Headers': 'X-Audio-Url, X-Audio-Timestamp', 'Content-Type': 'audio/mpeg',
             'Content-Length': audioBuffer.length,
             'X-Audio-Url': url,
         });
-        
+
         res.send(audioBuffer);
 
     } catch (err) {
@@ -1095,18 +1107,18 @@ export async function handleAudioGeneration(req, res) {
 }
 
 
-export const handleLastViewedUpdate = async (req, res) =>{
-    try{
+export const handleLastViewedUpdate = async (req, res) => {
+    try {
         console.log("Hit endpoint now");
         const notebookId = req.body.id;
         const notebookRef = db.collection('Notebook').doc(notebookId);
 
         await notebookRef.set({
-            dateUpdated: admin.firestore.FieldValue.serverTimestamp() 
-        }, {merge: true})
+            dateUpdated: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true })
 
         res.status(200);
-    } catch (err){
+    } catch (err) {
         res.status(500).json({
             error: `Failed to update server`,
             details: err.message

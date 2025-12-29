@@ -173,26 +173,96 @@ async function extractPdfText(file) {
   const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  // Parse PDF
-  const result = await pdfParse(buffer, { pagerender: renderPage });
-  const pages = (result.text || '').split(PAGE_SPLIT);
+  // Strategy 1: Standard PDF Parsing (Fast, no API cost)
+  try {
+    const result = await pdfParse(buffer, { pagerender: renderPage });
+    const pages = (result.text || '').split(PAGE_SPLIT);
 
-  // Process pages with 1-based numbering
-  const processedPages = pages
-    .map((text, index) => {
+    const processedPages = pages
+      .map((text, index) => {
+        const cleaned = text.trim();
+        return {
+          pageNumber: index + 1,
+          text: cleaned,
+          tokenCount: estimateTokens(cleaned)
+        };
+      })
+      .filter(p => p.text.length > 0)
+      .filter(p => !isNoisyPage(p.text));
+
+    // If standard parsing works and finds substantial text, return it.
+    // We check for a minimal length to ensure it's not just page numbers or artifacts.
+    const totalTextLength = processedPages.reduce((acc, p) => acc + p.text.length, 0);
+    if (processedPages.length > 0 && totalTextLength > 50) {
+      cache.set(cacheKey, processedPages);
+      return processedPages;
+    }
+    console.log("Standard PDF parsing yielded insufficient text. Attempting AI OCR...");
+  } catch (e) {
+    console.warn("Standard PDF parsing failed. Attempting AI OCR...", e);
+  }
+
+  // Strategy 2: Gemini 1.5 Flash OCR (Handles scans & translations)
+  if (!ai) {
+    console.error("Gemini API not configured. Cannot perform OCR on scanned PDF.");
+    return [];
+  }
+
+  try {
+    const model = "gemini-2.0-flash";
+    const pdfPart = {
+      inlineData: {
+        data: buffer.toString("base64"),
+        mimeType: "application/pdf"
+      },
+    };
+
+    const prompt = `
+      You are an advanced OCR and translation engine.
+      Task: Extract all text from this PDF document.
+      
+      Instructions:
+      1. Transcribe the content of every page accurately.
+      2. If the text is in a language other than English (e.g., Chinese, Georgian), translate it to English.
+      3. For math formulas, convert them to LaTeX or clear text representation.
+      4. Insert the delimiter "<<<PAGE_BREAK>>>" exactly between pages. 
+      5. Output ONLY the extracted/translated text. No intro or markdown code blocks.
+    `;
+
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: [{ role: 'user', parts: [{ text: prompt }, pdfPart] }],
+      config: {
+        temperature: 0.1,      // Low temp for accuracy
+      }
+    });
+
+    const fullText = response.text || "";
+
+    // Split by the specific delimiter requested in the prompt
+    const rawPages = fullText.split("<<<PAGE_BREAK>>>");
+
+    const ocrPages = rawPages.map((text, index) => {
       const cleaned = text.trim();
       return {
         pageNumber: index + 1,
         text: cleaned,
         tokenCount: estimateTokens(cleaned)
       };
-    })
-    .filter(p => p.text.length > 0) // Remove blank pages
-    .filter(p => !isNoisyPage(p.text)); // Remove noisy pages
+    }).filter(p => p.text.length > 0);
 
-  // Cache and return
-  cache.set(cacheKey, processedPages);
-  return processedPages;
+    if (ocrPages.length > 0) {
+      cache.set(cacheKey, ocrPages);
+      return ocrPages;
+    }
+
+    return [];
+
+  } catch (err) {
+    console.error("Gemini OCR Fallback Failed:", err.message);
+    // Return empty array so the controller handles it as "No text extracted"
+    return [];
+  }
 }
 
 async function extractDocxText(buffer) {

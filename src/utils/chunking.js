@@ -34,7 +34,7 @@ const PATTERNS = {
   mathNotation: /[\^_]\{|_\d|\\[a-zA-Z]+/,
 
   // Extended character set for filtering
-  allowedChars: /[A-Za-z0-9\s.,;:()'/±×÷=+\-*^_{}\[\]<>∞≈≠≤≥αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ∑∫∏∂∇∆√∈∉⊂⊃∪∩∀∃∄∅∧∨¬⊕⊗⊥∥∠°′″‴∝∼≅≡≢≪≫⊆⊇⊊⊋∖℘ℕℤℚℝℂ·×∘∙⊙⊖⊕⊗⊘⊚⊛⊜⊝⊞⊟⊠⊡⟨⟩⟦⟧‖|!@#$%&]/
+  allowedChars: /[A-Za-z0-9\s.,;:()'/±×÷=+\-*^_{}\[\]<>∞≈≠≤≥αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ∑∫∏∂∇∆√∈∉⊂⊃∪∩∀∃∄∅∧∨¬⊕⊗⊥∥∠°′″‴∝∼≅≡≢≪≫⊆⊇⊊⊋∖℘ℕℤℚℝℂ·×∘∙⊙⊖⊕⊗⊘⊚⊛⊜⊝⊞⊟⊠⊡⟨⟩⟦⟧‖|!@#$%&\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]/
 };
 
 // Lightweight LRU cache
@@ -235,17 +235,17 @@ async function extractImageText(buffer, mimeType) {
     },
   };
 
-  const prompt = "Transcribe all text visible in this image accurately. If there are diagrams or charts, provide a brief descriptive summary of them in brackets [].";
+  const prompt = "Transcribe all text visible in this image accurately. If there are diagrams or charts, provide a brief descriptive summary of them in brackets [].Translate any foreign language to English.";
 
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-lite", // Using fast model as requested
-      contents: [{ role: 'user', parts: [{ text: prompt }, imagePart] }], 
+      contents: [{ role: 'user', parts: [{ text: prompt }, imagePart] }],
       config: {
         thinkingConfig: { thinkingBudget: 0 }
       }
     });
-    
+
     // Based on your models.js usage:
     return [{ pageNumber: 1, text: response.text || "", tokenCount: estimateTokens(response.text || "") }];
   } catch (err) {

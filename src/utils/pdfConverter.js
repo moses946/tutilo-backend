@@ -30,7 +30,7 @@ export const convertTextToPdf = async (text) => {
     let page = pdfDoc.addPage();
     let { width, height } = page.getSize();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    
+
     // Layout settings
     const fontSize = 11;
     const margin = 50;
@@ -39,7 +39,7 @@ export const convertTextToPdf = async (text) => {
     const paragraphGap = fontSize * 0.8; // Extra space between paragraphs
 
     const cleanText = text || "No text content found.";
-    
+
     // Split by existing newlines to preserve source paragraphs
     const paragraphs = cleanText.split(/\r?\n/);
 
@@ -61,7 +61,7 @@ export const convertTextToPdf = async (text) => {
                 page = pdfDoc.addPage();
                 y = height - margin;
             }
-            
+
             page.drawText(line, {
                 x: margin,
                 y,
@@ -71,7 +71,7 @@ export const convertTextToPdf = async (text) => {
             });
             y -= lineHeight;
         }
-        
+
         // Add gap after every paragraph block
         y -= paragraphGap;
     }
@@ -84,7 +84,7 @@ export const convertTextToPdf = async (text) => {
 /**
  * Embeds an image into a PDF page
  */
-export const convertImageToPdf = async (imageBuffer, mimeType) => {
+export const convertImageToPdf = async (imageBuffer, mimeType, hiddenText = '') => {
     const pdfDoc = await PDFDocument.create();
     let image;
 
@@ -108,6 +108,20 @@ export const convertImageToPdf = async (imageBuffer, mimeType) => {
             width: image.width,
             height: image.height,
         });
+
+        // This ensures downstream tools like pdf-parse can find the content.
+        if (hiddenText && typeof hiddenText === 'string') {
+            const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+            // Draw text with 0 opacity (invisible) but selectable/extractable
+            page.drawText(hiddenText, {
+                x: 5,
+                y: 5,
+                size: 1, // Tiny text
+                font: font,
+                color: rgb(0, 0, 0),
+                opacity: 0,
+            });
+        }
 
         const pdfBytes = await pdfDoc.save();
         return Buffer.from(pdfBytes);

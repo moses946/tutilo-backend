@@ -235,11 +235,16 @@ async function extractImageText(buffer, mimeType) {
     },
   };
 
-  const prompt = "Transcribe all text visible in this image accurately. If there are diagrams or charts, provide a brief descriptive summary of them in brackets [].Translate any foreign language to English.";
-
+  const prompt = `
+    Task: Optical Character Recognition (OCR) & Translation.
+    1. Transcribe all text visible in this image accurately.
+    2. If the text is in a language other than English, translate it to English immediately following the original text.
+    3. If there are diagrams or charts, provide a brief descriptive summary of them in brackets [].
+    4. Output plain text only.
+  `;
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-lite", // Using fast model as requested
+      model: "gemini-2.5-flash", // Using fast model as requested
       contents: [{ role: 'user', parts: [{ text: prompt }, imagePart] }],
       config: {
         thinkingConfig: { thinkingBudget: 0 }

@@ -19,6 +19,10 @@ spec:
               value: "sk_test_d810930b536136b98eec3235be97570572bcf87b"
             - name: PAYSTACK_SECRET_KEY
               value: "sk_test_d810930b536136b98eec3235be97570572bcf87b"
+            - name: AZURE_SPEECH_KEY
+              value: "8bYqqDtXiMC24lhwW7BeG92wekSlLn2tQNzXhVAZHxEytMxYyNkjJQQJ99BLACYeBjFXJ3w3AAAYACOGTu83"
+            - name: AZURE_SPEECH_REGION
+              value: "eastus"
           ports:
             - containerPort: 8080
       containerConcurrency: 80

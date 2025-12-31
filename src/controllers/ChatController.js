@@ -123,16 +123,17 @@ export async function handleQuizRetrieval(req, res) {
     }
 }
 
-// handle reading messages
+
 export async function handleCreateMessage(req, res) {
     let result;
-    try {// get the chat Id
+    try {
         let now = admin.firestore.FieldValue.serverTimestamp();
         let data = req.body;
         let chatID = req.params.chatID;
         let chatRef = db.collection('Chat').doc(chatID);
-        // take the attachments and save in cloud storage
-        // OPTIMIZATION: Fetch chat doc to get existing summary
+        const uid = req.user.uid; // Get UID from middleware
+
+        // ... [EXISTING CODE: fetch summary, handle files] ...
         const chatDocSnap = await chatRef.get();
         const chatData = chatDocSnap.data();
         let existingSummary = chatData.summary || '';
@@ -143,11 +144,10 @@ export async function handleCreateMessage(req, res) {
             let attachmentBasePath = `notebooks/${data.notebookID}/chats/${chatID}`
             files = await handleBulkFileUpload(files, attachmentBasePath);
         }
-        // create a message ref and add attachements
+        
         createMessageQuery({ chatRef, content: [{ text: data.text }], role: 'user', attachments: files })
-        // store the history text only, Will build the attachments for Gemini from the files field in the request
         let message = { role: 'user', parts: [{ text: data.text }] };
-        // adding the message to history, because even if the AI generation fails the message will still be seen in history
+        
         if (!chatMap.has(chatID)) {
             chatMap.set(chatID, { history: [], chunks: {} })
         };
@@ -157,38 +157,31 @@ export async function handleCreateMessage(req, res) {
             chatMap.set(chatID, chatObj);
         }
 
-        // OPTIMIZATION: Chat Summarization Logic
-        // We keep the last 10 messages for immediate context + the summary
         const CONTEXT_WINDOW_SIZE = 10;
         chatObj.history.push(message);
 
-        // Check if history exceeds double the window (trigger point)
         if (chatObj.history.length > CONTEXT_WINDOW_SIZE * 2) {
             console.log(`[ChatController] Summarizing chat ${chatID}...`);
-            
-            // 1. Identify messages to archive vs keep
             const cutOffIndex = chatObj.history.length - CONTEXT_WINDOW_SIZE;
             const messagesToSummarize = chatObj.history.slice(0, cutOffIndex);
             const recentMessages = chatObj.history.slice(cutOffIndex);
-            // 2. Generate new summary
-            const newSummary = await handleChatSummarization(existingSummary, messagesToSummarize);
-
-            // 3. Update Database
-            await chatRef.update({ summary: newSummary });
             
-            // 4. Update Memory
-            existingSummary = newSummary; // Update local var for the agent to use below
-            chatObj.history = recentMessages; // Truncate in-memory history
+            // [MODIFIED CALL]
+            const newSummary = await handleChatSummarization(existingSummary, messagesToSummarize, uid);
+
+            await chatRef.update({ summary: newSummary });
+            existingSummary = newSummary;
+            chatObj.history = recentMessages;
             
             console.log(`[ChatController] Summary updated.`);
         }
 
-        // Prepare context for the Agent
         let agentContextObj = {
             ...chatObj,
             history: [...chatObj.history] 
         };
 
+        // Note: handleRunAgent accesses req.user.uid internally
         result = await handleRunAgent(req, data, agentContextObj, chatRef, existingSummary);
         
         if (result.message) {
@@ -200,9 +193,9 @@ export async function handleCreateMessage(req, res) {
     }
 
     res.json(result)
-
 }
 
+// handle reading messages
 export async function handleReadMessages(req, res) {
     // build cache
     let chatID = req.params.chatID;

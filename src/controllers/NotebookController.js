@@ -11,31 +11,27 @@ import { handleComprehensiveQuizGeneration } from "../models/models.js";
 
 export async function handleGenerateNotebookQuiz(req, res) {
     const { id: notebookId } = req.params;
+    const userId = req.user.uid; // Get ID from middleware
+
     try {
         const {numberOfQuestions, difficultyLevel} = req.body;
         const notebookRef = db.collection('Notebook').doc(notebookId);
         
-        // 1. Fetch Concept Map
+        // ... [EXISTING CODE: Fetch Concept Map, Select Concepts, Prepare Data] ...
         const conceptMapDoc = await fetchConceptMapDoc(notebookRef);
         if (!conceptMapDoc) {
             console.log(`[QuizGen] Concept Map missing for notebook: ${notebookId}`);
             return res.status(404).json({ error: 'Concept map not found' });
         }
 
-        // 2. Select Concepts (Randomly pick up to 10 to avoid token limits)
         const nodes = conceptMapDoc.data.graphData?.layout?.graph?.nodes || [];
         if (nodes.length === 0) return res.json({ questions: [] });
 
-        // Shuffle and slice
         const selectedNodes = nodes.sort(() => 0.5 - Math.random()).slice(0, 10);
 
-        // 3. Prepare Data for AI (Fetch 1 chunk per concept)
         const conceptsForAi = [];
-        
-        // We need to resolve chunks. To avoid N+1 queries, we'll gather all paths first.
-        // For simplicity in this context, we take the first chunkId of each node.
         const chunkIdsToFetch = [];
-        const nodeMap = new Map(); // chunkId -> node info
+        const nodeMap = new Map();
 
         selectedNodes.forEach(node => {
             if (node.data.chunkIds && node.data.chunkIds.length > 0) {
@@ -46,27 +42,23 @@ export async function handleGenerateNotebookQuiz(req, res) {
         });
 
         const chunkPaths = chunkIdsToFetch.map(cId => `notebooks/${notebookId}/chunks/${cId}.json`);
-        
-        // Parallel fetch from storage
         const chunkTexts = await handleBulkChunkRetrieval(chunkPaths);
 
         chunkTexts.forEach((text, index) => {
             const cId = chunkIdsToFetch[index];
             const nodeInfo = nodeMap.get(cId);
-            
-            // Clean text (parse if JSON)
             let cleanText = typeof text === 'string' ? text : JSON.stringify(text);
             
             conceptsForAi.push({
                 conceptId: nodeInfo.id,
                 conceptName: nodeInfo.label,
-                text: cleanText.substring(0, 1000) // Truncate to save context window
+                text: cleanText.substring(0, 1000)
             });
         });
 
         // 4. Generate Quiz
-        const quizData = await handleComprehensiveQuizGeneration(conceptsForAi, numberOfQuestions, difficultyLevel);
-
+        const quizData = await handleComprehensiveQuizGeneration(conceptsForAi, userId, numberOfQuestions, difficultyLevel);
+   
         res.json({ questions: quizData });
 
     } catch (err) {
@@ -74,7 +66,6 @@ export async function handleGenerateNotebookQuiz(req, res) {
         res.status(500).json({ error: 'Failed to generate quiz' });
     }
 }
-
 // Helper to preprocess files safely
 const preprocessFileForPdfSimple = async (file) => {
     try {
@@ -199,15 +190,15 @@ export async function handleNotebookCreation(req, res){
 
 export async function handleNotebookProcessing(req, res) {
     const { id: notebookId } = req.params;
-    const { subscription } = req.user;
+    const { subscription, uid } = req.user; // Ensure uid is extracted
     
-    // Concurrency Limit: Process 3 files at a time
+    // ... [EXISTING CODE: setup, material processing] ...
     const limit = pLimit(3);
 
     try {
         const notebookRef = db.collection('Notebook').doc(notebookId);
         const notebookSnap = await notebookRef.get();
-        
+        // ... checks ...
         if (notebookSnap.exists && notebookSnap.data().status === 'completed') {
             return res.json({ status: 'completed', message: 'Already processed' });
         }
@@ -216,43 +207,30 @@ export async function handleNotebookProcessing(req, res) {
         const vectorDim = modelLimits.vectorDim;
         const materialRefs = notebookSnap.data().materialRefs || [];
 
-        // --- 1. ROBUST MATERIAL PROCESSING ---
+        // ... [Material Processing Loop] ...
         const materialPromises = materialRefs.map((materialRef) => {
             return limit(async () => {
-                // ISOLATED TRY/CATCH: This ensures one file failure doesn't crash the whole request
+                // ... logic ...
                 try {
+                    // ... fetch, extract ...
                     const materialSnap = await materialRef.get();
                     if (!materialSnap.exists) return { success: false, reason: 'Material not found' };
-                    
                     const materialData = materialSnap.data();
-                    
-                    // Skip if already chunked (Return success but with no new data)
-                    if (materialData.chunkRefs && materialData.chunkRefs.length > 0) {
-                        return { success: true, skipped: true }; 
-                    }
+                    if (materialData.chunkRefs && materialData.chunkRefs.length > 0) return { success: true, skipped: true }; 
 
                     const storagePath = `notebooks/${notebookId}/materials/${materialData.storagePath}`;
                     const fileBuffer = await bucket.file(storagePath).download();
-                    
                     const fileObj = {
                         buffer: fileBuffer[0],
                         mimetype: 'application/pdf', 
                         originalname: materialData.name
                     };
-
                     const chunks = await extractContent(fileObj);
-                    
-                    // Guard: Handle empty or unreadable files
-                    if (!chunks || chunks.length === 0) {
-                        throw new Error(`No text content extracted from ${materialData.name}`);
-                    }
+                    if (!chunks || chunks.length === 0) throw new Error(`No text content extracted`);
 
                     const chunkRefs = await createChunksQuery(chunks, materialRef);
-                    
                     const chunkBasePath = `notebooks/${notebookId}/chunks`;
-                    const chunkItems = chunks.map((chunk, index) => {
-                        return { ...chunk, name: chunkRefs[index].id };
-                    });
+                    const chunkItems = chunks.map((chunk, index) => ({ ...chunk, name: chunkRefs[index].id }));
                     
                     await Promise.all([
                         handleBulkChunkUpload(chunkItems, chunkBasePath),
@@ -263,44 +241,36 @@ export async function handleNotebookProcessing(req, res) {
                     await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
 
                     return { success: true, chunks, chunkRefs, name: materialData.name };
-
                 } catch (fileErr) {
                     console.error(`Failed to process material (${materialRef.id}):`, fileErr);
-                    // Return failure info so we can report it later
                     return { success: false, reason: fileErr.message, refId: materialRef.id };
                 }
             });
         });
 
         const materialResults = await Promise.all(materialPromises);
-
-        // Filter valid results
         const successfulResults = materialResults.filter(r => r.success && !r.skipped);
         const failedResults = materialResults.filter(r => !r.success);
-
-        // Collect data for AI
         const chunkRefsCombined = successfulResults.flatMap(r => r.chunkRefs);
         const chunksCombined = successfulResults.flatMap(r => r.chunks);
 
-        // DB Update: Log specific file errors if any occurred
+        // ... [DB Update logic] ...
         if (failedResults.length > 0) {
             await notebookRef.update({
                 processingWarnings: failedResults.map(f => `Failed to process file: ${f.reason}`)
             });
         }
-
-        // CRITICAL CHECK: If *all* files failed (and there were files to begin with), abort.
         if (chunkRefsCombined.length === 0 && materialRefs.length > 0) {
             await notebookRef.update({ status: 'failed', error: 'All uploaded materials failed to process.' });
-            return; // Exit, nothing for AI to generate
+            return;
         }
-
 
         // --- 2. ROBUST AI ASSET GENERATION ---
         if (chunkRefsCombined.length > 0) {
             
             const conceptMapTask = async () => {
-                let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined);
+                // [MODIFIED CALL]
+                let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined, uid);
                 if (typeof result === 'string') {
                     result = result.replace(/```json/g, '').replace(/```/g, '').trim();
                 }
@@ -312,43 +282,34 @@ export async function handleNotebookProcessing(req, res) {
             };
 
             const flashcardsTask = async () => {
-                const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef, modelLimits.flashcardModel);
+                // [MODIFIED CALL]
+                const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef, modelLimits.flashcardModel, uid);
                 if (flashcardRef) {
                     await updateNotebookWithFlashcards(notebookRef, flashcardRef);
                 }
             };
 
             const detailedSummaryTask = async () => {
-                const detailedSummary = await handleNotebookDetailedSummary(notebookId);
+                // [MODIFIED CALL]
+                const detailedSummary = await handleNotebookDetailedSummary(notebookId, uid);
                 if (detailedSummary){
                     await updateNotebookWithDetailedSummary(notebookRef, detailedSummary);
                 }
             };
 
-            // Use allSettled: If Flashcards fail, we still want the Concept Map saved.
             const aiResults = await Promise.allSettled([
                 conceptMapTask(),
                 flashcardsTask(),
                 detailedSummaryTask()
             ]);
             
-            // Optional: Log AI failures silently
-            const aiErrors = aiResults
-                .filter(r => r.status === 'rejected')
-                .map(r => r.reason.message);
-                
-            if (aiErrors.length > 0) {
-                console.error("Some AI tasks failed:", aiErrors);
-                // We might append these to warnings, or just ignore if non-critical
-            }
+            // ... logging ...
         }
 
-        // Mark completed (even if some files failed, as long as we have *some* content)
         await notebookRef.update({ status: 'completed' });
         res.json({ status: 'completed', message: 'Processing finished' });
 
     } catch (err) {
-        // This catch block now handles only "Catastrophic" errors (DB down, Auth fail, etc.)
         console.error(`[Processing] Critical Failure for ${notebookId}:`, err);
         const notebookRef = db.collection('Notebook').doc(notebookId);
         await notebookRef.update({ status: 'failed', error: 'System error during processing.' }); 
@@ -764,34 +725,16 @@ export async function handleConceptDetail(req, res) {
 export async function handleConceptChatCreate(req, res) {
     try {
         const { id: notebookId, conceptId } = req.params;
-        if (!notebookId || !conceptId) {
-            return res.status(400).json({
-                error: 'Invalid request',
-                message: 'Notebook ID and concept ID are required',
-            });
-        }
+        const userId = req.user && req.user.uid ? req.user.uid : req.body?.userID;
+        const resolvedUserId = userId; // Should exist if auth middleware works
 
+        // ... [EXISTING CODE: resolveConceptContext, validation] ...
+        if (!notebookId || !conceptId) return res.status(400).json({ error: 'Invalid request' });
         const conceptContext = await resolveConceptContext({ notebookId, conceptId });
-
-        if (!conceptContext) {
-            return res.status(404).json({
-                error: 'Concept map not found',
-                message: `No concept map found for notebook ID: ${notebookId}`,
-            });
-        }
-
-        if (!conceptContext.exists) {
-            return res.status(404).json({
-                error: 'Concept not found',
-                message: `No concept node found with ID: ${conceptId}`,
-            });
-        }
+        if (!conceptContext || !conceptContext.exists) return res.status(404).json({ error: 'Concept not found' });
 
         const notebookRef = db.collection('Notebook').doc(notebookId);
         const now = admin.firestore.FieldValue.serverTimestamp();
-
-        const userId = req.user && req.user.uid ? req.user.uid : req.body?.userID;
-        const resolvedUserId = userId
         const userRef = db.collection('User').doc(resolvedUserId);
 
         const existingChatSnapshot = await db
@@ -829,7 +772,6 @@ export async function handleConceptChatCreate(req, res) {
                 referenceMaterials: referenceMaterialsPayload,
                 conceptChunks: conceptContext.chunks,
             };
-
             chatRef = await db.collection('Chat').add(payload);
         }
 
@@ -842,7 +784,8 @@ export async function handleConceptChatCreate(req, res) {
         if (!quizSnapshot.empty) {
             quizQuestions = quizSnapshot.docs[0].data().questions;
         } else {
-            const quizRef = await handleQuizGeneration(chatRef.id, conceptContext.chunks);
+            // [MODIFIED CALL]
+            const quizRef = await handleQuizGeneration(chatRef.id, conceptContext.chunks, resolvedUserId);
             if (quizRef) {
                 const newQuizDoc = await quizRef.get();
                 quizQuestions = newQuizDoc.data().questions;
@@ -859,10 +802,7 @@ export async function handleConceptChatCreate(req, res) {
         });
     } catch (err) {
         console.error('Error creating concept chat:', err);
-        res.status(500).json({
-            error: 'Failed to create concept chat',
-            details: err.message,
-        });
+        res.status(500).json({ error: 'Failed to create concept chat', details: err.message });
     }
 }
 

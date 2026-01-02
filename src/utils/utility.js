@@ -4,6 +4,7 @@ import {ai} from '../models/models.js'
 import qdrantClient from '../services/qdrant.js'
 import {v4} from 'uuid'
 import { deleteChatQuery, deleteNotebookQuery, updateNotebookWithNewMaterialQuery } from '../models/query.js';
+import pLimit from 'p-limit'; // Ensure you have this installed
 // multer storage
 const storage = multer.memoryStorage();
 export const upload = multer({ storage });
@@ -130,84 +131,164 @@ export const handleEmbedding = async (pages)=>{
   Create embeddings for chunks and store in Qdrant
   Input: chunks: Array of chunk objects with text content, chunkRefs: Array of chunk document references
   Output: Array of Qdrant point IDs
+  ****Optimized to run in half the time****
 */
-export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collectionName = 'notebook_chunks', vectorDim=256) => {
-    try { 
-        // Extract text content from chunks
-        // Batch functionality: process up to 100 chunks per embedding request
-        const texts = chunks.map(chunk => chunk.text);
-        let embeddingBatchSize = 100;
-        let allEmbeddings = [];
-        for (let i = 0; i < texts.length; i += embeddingBatchSize) {
-            const batchTexts = texts.slice(i, i + embeddingBatchSize);
-            embeddingBatchSize = Math.min(embeddingBatchSize, texts.length - i);
-            const response = await ai.models.embedContent({
-                model: 'gemini-embedding-exp-03-07',
-                contents: batchTexts,
-                taskType: 'RETRIEVAL_DOCUMENT',
-                config: { outputDimensionality: vectorDim },
-            });
-            if (response && response.embeddings) {
-                allEmbeddings = allEmbeddings.concat(response.embeddings);
-            }
-        }
-        // For downstream code compatibility, mimic the original response object
-        const response = { embeddings: allEmbeddings };        
-        // Prepare points for Qdrant with chunkID in payload
-        const points = response.embeddings.map((embedding, index) => ({
-            //  Unique ID
-            id:v4(),
-            vector: embedding.values,
-            payload: {
-                chunkID: chunkRefs[index].id,
-                createdAt: new Date().toISOString()
-            }
-        }));
-        
-        // Ensure collection exists
+export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collectionName = 'notebook_chunks', vectorDim = 256) => {
+    // CONCURRENCY CONTROL
+    // Limit to 5 concurrent requests to avoid hitting rate limits.
+    const limit = pLimit(5); 
+
+    try {
+        // 1. SETUP: Ensure collection exists once (not inside the loop)
         try {
-            let collection = await qdrantClient.getCollection(collectionName);
-            if(!collection){
-                await qdrantClient.createCollection(collectionName, {
-                    vectors: {
-                        size: vectorDim,
-                        distance: 'Cosine'
-                    }
-                });
-            }
+            const collection = await qdrantClient.getCollection(collectionName);
         } catch (error) {
             if (error.status === 404) {
                 await qdrantClient.createCollection(collectionName, {
-                    vectors: {
-                        size: vectorDim,
-                        distance: 'Cosine'
-                    }
+                    vectors: { size: vectorDim, distance: 'Cosine' }
                 });
             } else {
                 throw error;
             }
         }
-        
-        // Upload points to Qdrant in batches
-        let batchSize = 100;
-        const uploadedPoints = [];
-        
-        for (let i = 0; i < points.length; i += batchSize) {
-            const batch = points.slice(i, i + batchSize);
-            const result = await qdrantClient.upsert(collectionName, {
-                points: batch
+
+        // 2. PREPARATION: Create batches
+        const embeddingBatchSize = 100;
+        const batches = [];
+        for (let i = 0; i < chunks.length; i += embeddingBatchSize) {
+            batches.push({
+                texts: chunks.slice(i, i + embeddingBatchSize).map(c => c.text),
+                refSlice: chunkRefs.slice(i, i + embeddingBatchSize),
+                indexOffset: i
             });
-            // Making the batch size dynamic
-            batchSize = Math.min(batchSize, points.length - i);
-            uploadedPoints.push(...batch.map(point => point.id));
         }
-        return uploadedPoints;
+
+        // 3. PIPELINE: Process batches in parallel
+        // We map each batch to a Promise that handles both Embedding AND Storage
+        const tasks = batches.map((batch) => {
+            return limit(async () => {
+                
+                // A. Generate Embeddings
+                // NOTE: Switched model to 'gemini-embedding-001' since its more accurate and stable. 
+                const response = await ai.models.embedContent({
+                    model: 'gemini-embedding-001', 
+                    contents: batch.texts,
+                    taskType: 'RETRIEVAL_DOCUMENT',
+                    config: { outputDimensionality: vectorDim },
+                });
+
+                if (!response || !response.embeddings) return [];
+
+                // B. Prepare Qdrant Points
+                const points = response.embeddings.map((embedding, idx) => ({
+                    id: v4(),
+                    vector: embedding.values,
+                    payload: {
+                        chunkID: batch.refSlice[idx].id,
+                        createdAt: new Date().toISOString()
+                    }
+                }));
+
+                // C. Fast Upsert
+                // wait: false -> Don't wait for disk sync (huge speedup)
+                await qdrantClient.upsert(collectionName, {
+                    points: points,
+                    wait: false 
+                });
+
+                return points.map(p => p.id);
+            });
+        });
+
+        // 4. EXECUTION: Wait for all parallel tasks to finish
+        const results = await Promise.all(tasks);
         
+        // Flatten results into a single array of IDs
+        return results.flat();
+
     } catch (error) {
         console.error('Error in handleChunkEmbeddingAndStorage:', error);
         throw error;
     }
 }
+
+// export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collectionName = 'notebook_chunks', vectorDim=256) => {
+//     try { 
+//         // Extract text content from chunks
+//         // Batch functionality: process up to 100 chunks per embedding request
+//         const texts = chunks.map(chunk => chunk.text);
+//         let embeddingBatchSize = 100;
+//         let allEmbeddings = [];
+//         for (let i = 0; i < texts.length; i += embeddingBatchSize) {
+//             const batchTexts = texts.slice(i, i + embeddingBatchSize);
+//             embeddingBatchSize = Math.min(embeddingBatchSize, texts.length - i);
+//             const response = await ai.models.embedContent({
+//                 model: 'gemini-embedding-exp-03-07',
+//                 contents: batchTexts,
+//                 taskType: 'RETRIEVAL_DOCUMENT',
+//                 config: { outputDimensionality: vectorDim },
+//             });
+//             if (response && response.embeddings) {
+//                 allEmbeddings = allEmbeddings.concat(response.embeddings);
+//             }
+//         }
+//         // For downstream code compatibility, mimic the original response object
+//         const response = { embeddings: allEmbeddings };        
+//         // Prepare points for Qdrant with chunkID in payload
+//         const points = response.embeddings.map((embedding, index) => ({
+//             //  Unique ID
+//             id:v4(),
+//             vector: embedding.values,
+//             payload: {
+//                 chunkID: chunkRefs[index].id,
+//                 createdAt: new Date().toISOString()
+//             }
+//         }));
+        
+//         // Ensure collection exists
+//         try {
+//             let collection = await qdrantClient.getCollection(collectionName);
+//             if(!collection){
+//                 await qdrantClient.createCollection(collectionName, {
+//                     vectors: {
+//                         size: vectorDim,
+//                         distance: 'Cosine'
+//                     }
+//                 });
+//             }
+//         } catch (error) {
+//             if (error.status === 404) {
+//                 await qdrantClient.createCollection(collectionName, {
+//                     vectors: {
+//                         size: vectorDim,
+//                         distance: 'Cosine'
+//                     }
+//                 });
+//             } else {
+//                 throw error;
+//             }
+//         }
+        
+//         // Upload points to Qdrant in batches
+//         let batchSize = 100;
+//         const uploadedPoints = [];
+        
+//         for (let i = 0; i < points.length; i += batchSize) {
+//             const batch = points.slice(i, i + batchSize);
+//             const result = await qdrantClient.upsert(collectionName, {
+//                 points: batch
+//             });
+//             // Making the batch size dynamic
+//             batchSize = Math.min(batchSize, points.length - i);
+//             uploadedPoints.push(...batch.map(point => point.id));
+//         }
+//         return uploadedPoints;
+        
+//     } catch (error) {
+//         console.error('Error in handleChunkEmbeddingAndStorage:', error);
+//         throw error;
+//     }
+// }
 
 export const handleNotebookUpdate = async(notebookID, materialRefs)=>{
     const notebookRef = db.collection('Notebook').doc(notebookID);

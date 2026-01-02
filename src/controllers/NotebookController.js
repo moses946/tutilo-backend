@@ -108,9 +108,9 @@ const preprocessFileForPdfSimple = async (file) => {
         throw err;
     }
 };
-
 export async function handleNotebookCreation(req, res){
     console.log("Starting notebook creation...");
+
     try {
         const { uid, subscription } = req.user;
         const limits = planLimits[subscription];
@@ -173,6 +173,8 @@ export async function handleNotebookCreation(req, res){
         await updateNotebookWithMaterials(notebookRef, materialRefs);
 
         console.log(`Notebook ${notebookRef.id} created successfully.`);
+        
+        
         res.status(201).json({
             notebookId: notebookRef.id,
             status: 'processing',
@@ -190,10 +192,11 @@ export async function handleNotebookCreation(req, res){
 
 export async function handleNotebookProcessing(req, res) {
     const { id: notebookId } = req.params;
-    const { subscription, uid } = req.user; // Ensure uid is extracted
+    const { subscription, uid } = req.user; 
     
     // ... [EXISTING CODE: setup, material processing] ...
     const limit = pLimit(3);
+
 
     try {
         const notebookRef = db.collection('Notebook').doc(notebookId);
@@ -208,17 +211,26 @@ export async function handleNotebookProcessing(req, res) {
         const materialRefs = notebookSnap.data().materialRefs || [];
 
         // ... [Material Processing Loop] ...
+        
         const materialPromises = materialRefs.map((materialRef) => {
             return limit(async () => {
-                // ... logic ...
+                // Unique label for this specific material execution
+
                 try {
                     // ... fetch, extract ...
                     const materialSnap = await materialRef.get();
-                    if (!materialSnap.exists) return { success: false, reason: 'Material not found' };
+                    if (!materialSnap.exists) {
+                        return { success: false, reason: 'Material not found' };
+                    }
+                    
                     const materialData = materialSnap.data();
-                    if (materialData.chunkRefs && materialData.chunkRefs.length > 0) return { success: true, skipped: true }; 
+                    if (materialData.chunkRefs && materialData.chunkRefs.length > 0) {
+                        return { success: true, skipped: true }; 
+                    }
 
                     const storagePath = `notebooks/${notebookId}/materials/${materialData.storagePath}`;
+                    
+                    // Measure download + extract specifically
                     const fileBuffer = await bucket.file(storagePath).download();
                     const fileObj = {
                         buffer: fileBuffer[0],
@@ -226,6 +238,7 @@ export async function handleNotebookProcessing(req, res) {
                         originalname: materialData.name
                     };
                     const chunks = await extractContent(fileObj);
+
                     if (!chunks || chunks.length === 0) throw new Error(`No text content extracted`);
 
                     const chunkRefs = await createChunksQuery(chunks, materialRef);
@@ -237,6 +250,7 @@ export async function handleNotebookProcessing(req, res) {
                         updateMaterialWithChunks(materialRef, chunkRefs)
                     ]);
 
+                    // Measure Vector/Embedding specifically
                     const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookId, vectorDim);
                     await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
 
@@ -249,6 +263,7 @@ export async function handleNotebookProcessing(req, res) {
         });
 
         const materialResults = await Promise.all(materialPromises);
+
         const successfulResults = materialResults.filter(r => r.success && !r.skipped);
         const failedResults = materialResults.filter(r => !r.success);
         const chunkRefsCombined = successfulResults.flatMap(r => r.chunkRefs);
@@ -269,7 +284,6 @@ export async function handleNotebookProcessing(req, res) {
         if (chunkRefsCombined.length > 0) {
             
             const conceptMapTask = async () => {
-                // [MODIFIED CALL]
                 let result = await handleConceptMapGeneration(chunkRefsCombined, chunksCombined, uid);
                 if (typeof result === 'string') {
                     result = result.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -282,7 +296,6 @@ export async function handleNotebookProcessing(req, res) {
             };
 
             const flashcardsTask = async () => {
-                // [MODIFIED CALL]
                 const flashcardRef = await handleFlashcardGeneration(chunkRefsCombined, chunksCombined, notebookRef, modelLimits.flashcardModel, uid);
                 if (flashcardRef) {
                     await updateNotebookWithFlashcards(notebookRef, flashcardRef);
@@ -290,8 +303,7 @@ export async function handleNotebookProcessing(req, res) {
             };
 
             const detailedSummaryTask = async () => {
-                // [MODIFIED CALL]
-                const detailedSummary = await handleNotebookDetailedSummary(notebookId, uid);
+                const detailedSummary = await handleNotebookDetailedSummary(notebookId, chunkRefsCombined, chunksCombined, uid);
                 if (detailedSummary){
                     await updateNotebookWithDetailedSummary(notebookRef, detailedSummary);
                 }
@@ -1097,7 +1109,6 @@ export async function handleAudioGeneration(req, res) {
 
 export const handleLastViewedUpdate = async (req, res) =>{
     try{
-        console.log("Hit endpoint now");
         const notebookId = req.body.id;
         const notebookRef = db.collection('Notebook').doc(notebookId);
 

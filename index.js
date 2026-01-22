@@ -40,7 +40,7 @@ wss.on('connection', async (ws, req) => {
   try {
     const parsedUrl = url.parse(req.url, true);
     token = parsedUrl.query?.token;
-    
+
     const mode = parsedUrl.query?.mode;
     const notebookId = parsedUrl.query?.notebookId;
 
@@ -48,7 +48,7 @@ wss.on('connection', async (ws, req) => {
     if (!token) throw new Error('No token parameter');
     const decoded = await verifyToken(token);
     if (!decoded) throw new Error('Unauthorized user');
-    
+
     if (mode === 'live' && notebookId) {
       await handleLiveSession(ws, req, decoded, notebookId);
       return; // Exit main handler, live session takes over this socket
@@ -77,7 +77,7 @@ const allowedOrigins = [
   'http://localhost:3000',           // Local development
   'http://localhost:5173',           // Vite dev server
   'http://localhost:5174',           // Alternative Vite port
-  'https://tutilo-beta.web.app',  
+  'https://tutilo-beta.web.app',
   'https://tutilo-beta.firebaseapp.com'   // Production frontend
 ];
 
@@ -93,7 +93,7 @@ const corsOptions = {
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true, 
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
@@ -121,8 +121,8 @@ app.use('/api/v1/chats', authMiddleWare, chatRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/billing', authMiddleWare, billingRouter);
 app.use('/api/v1/users', authMiddleWare, userRouter);
-app.use('/api/v1/quizzes', quizRouter);
-app.use('/api/v1/flashcards', flashcardsRouter);
+app.use('/api/v1/quizzes', authMiddleWare, quizRouter);
+app.use('/api/v1/flashcards', authMiddleWare, flashcardsRouter);
 // threat vectore ---------------
 app.use('/api/v1/webhooks', webhookRouter);
 // -------------------
@@ -165,14 +165,14 @@ cron.schedule('0 * * * *', async () => {
       // BREAK CONDITION: If no users found, we are done.
       if (!userIds || userIds.length === 0) {
         console.log("No more users to delete. Job complete.");
-        break; 
+        break;
       }
 
       console.log(`Batch ${batchCount + 1}: Processing ${userIds.length} users...`);
 
       // 2. Retrieve Notebooks
       const notebookIds = await handleBulkNotebookIdRetrieval(userIds);
-      
+
       if (notebookIds && notebookIds.length > 0) {
         // Handle notebook deletion (assumed to be chunked/safe internally)
         await handleBulkNotebookDeletion(notebookIds);

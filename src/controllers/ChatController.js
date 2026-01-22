@@ -83,7 +83,7 @@ export async function handleDeleteChat(req, res) {
         let chatID = req.params.chatID;
         let { notebookID } = req.body;
         if (!notebookID) {
-            return res.status(400).json({ message: 'womp womp' })
+            return res.status(400).json({ message: 'Notebook ID is required' })
         }
         // delete chat related stuff on db
         await deleteChatQuery(chatID);
@@ -92,7 +92,7 @@ export async function handleDeleteChat(req, res) {
         res.status(200).json({ message: 'Chat deleted successfully' });
     } catch (err) {
         console.log(`[ERROR]:${err}`);
-        return res.status(500).json({ message: 'Woopsies!' });
+        return res.status(500).json({ message: 'Failed to delete chat' });
     }
 }
 
@@ -144,10 +144,10 @@ export async function handleCreateMessage(req, res) {
             let attachmentBasePath = `notebooks/${data.notebookID}/chats/${chatID}`
             files = await handleBulkFileUpload(files, attachmentBasePath);
         }
-        
+
         createMessageQuery({ chatRef, content: [{ text: data.text }], role: 'user', attachments: files })
         let message = { role: 'user', parts: [{ text: data.text }] };
-        
+
         if (!chatMap.has(chatID)) {
             chatMap.set(chatID, { history: [], chunks: {} })
         };
@@ -165,25 +165,25 @@ export async function handleCreateMessage(req, res) {
             const cutOffIndex = chatObj.history.length - CONTEXT_WINDOW_SIZE;
             const messagesToSummarize = chatObj.history.slice(0, cutOffIndex);
             const recentMessages = chatObj.history.slice(cutOffIndex);
-            
+
             // [MODIFIED CALL]
             const newSummary = await handleChatSummarization(existingSummary, messagesToSummarize, uid);
 
             await chatRef.update({ summary: newSummary });
             existingSummary = newSummary;
             chatObj.history = recentMessages;
-            
+
             console.log(`[ChatController] Summary updated.`);
         }
 
         let agentContextObj = {
             ...chatObj,
-            history: [...chatObj.history] 
+            history: [...chatObj.history]
         };
 
         // Note: handleRunAgent accesses req.user.uid internally
         result = await handleRunAgent(req, data, agentContextObj, chatRef, existingSummary);
-        
+
         if (result.message) {
             chatObj.history.push({ role: 'model', parts: [{ text: result.message }] });
         }

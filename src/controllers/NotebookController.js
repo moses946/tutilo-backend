@@ -351,8 +351,8 @@ export async function handleNotebookStatus(req, res) {
 export async function handleNotebookDeletion(req, res) {
     const { id } = req.params;
     try {
-        let noteookRef = db.collection('Notebook').doc(id)
-        await noteookRef.update({ isDeleted: true });
+        let notebookRef = db.collection('Notebook').doc(id)
+        await notebookRef.update({ isDeleted: true });
         res.status(200).json({ message: 'Notebook deleted successfully' });
     } catch (err) {
         console.error('Notebook deletion failed:', err);

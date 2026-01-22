@@ -4,8 +4,8 @@ import dotenv from 'dotenv'
 import admin, { db } from "../services/firebase.js";
 
 dotenv.config();
-export async function handleInitTransaction(req, res){
-    try{
+export async function handleInitTransaction(req, res) {
+    try {
         // get user result
         /**
          * userData:object
@@ -27,45 +27,45 @@ export async function handleInitTransaction(req, res){
             return res.status(400).json({ message: 'Invalid subscription plan.' });
         }
         let response = await fetch(`${payStackURL}/transaction/initialize`, {
-            method:'POST',
-            headers:{
+            method: 'POST',
+            headers: {
                 // add the secret key in the environment variable
-                'Authorization':`Bearer ${process.env.PAYSTACK_TEST_SECRET_KEY}`,
+                'Authorization': `Bearer ${process.env.PAYSTACK_TEST_SECRET_KEY}`,
                 'Content-Type': 'application/json'
             },
-            body:JSON.stringify({
-                email: email, 
-                amount: JSON.stringify(amount)
+            body: JSON.stringify({
+                email: email,
+                amount: amount
             })
         });
-        if(!response.ok){
-            res.status(response.status).json({message:'transaction init failed'})
-        }else{
+        if (!response.ok) {
+            res.status(response.status).json({ message: 'transaction init failed' })
+        } else {
             let result = await response.json();
-            if(result.status&&result.data.access_code){
-                res.status(response.status).json({message:result.message, status:result.status, accessCode:result.data.access_code})
+            if (result.status && result.data.access_code) {
+                res.status(response.status).json({ message: result.message, status: result.status, accessCode: result.data.access_code })
             }
-            
+
         }
-    }catch(err){
+    } catch (err) {
         console.log(`[ERROR]:${err}`)
     }
 }
 
-export async function handleTransactionVerification(req, res){
+export async function handleTransactionVerification(req, res) {
     const { userID } = req.params;
     const { reference, plan } = req.body;
-    
+
     if (!reference) {
         return res.status(400).json({ message: 'Transaction reference is required.' });
     }
     try {
         // 1. VERIFY THE TRANSACTION WITH PAYSTACK
         const paystackResponse = await fetch(`${payStackURL}/transaction/verify/${reference}`, {
-            method:'GET',
+            method: 'GET',
             headers: {
                 'Authorization': `Bearer ${process.env.PAYSTACK_TEST_SECRET_KEY}`,
-                'Content-Type':'application/json'
+                'Content-Type': 'application/json'
             }
         });
         const { status, data } = await paystackResponse.json();
@@ -74,12 +74,16 @@ export async function handleTransactionVerification(req, res){
         if (!status || data.status !== 'success') {
             return res.status(400).json({ message: 'Transaction verification failed.' });
         }
-        
+
         // 3. (IMPORTANT) Check if the amount paid matches what you expected
         // The amount is in the smallest currency unit (e.g., kobo, cents)
-        const expectedAmount = 500 * 100; // e.g., 500 NGN = 50000 kobo
-        if (data.amount !== expectedAmount) {
-             return res.status(400).json({ message: 'Invalid payment amount.' });
+        const planAmounts = {
+            'plus': 50000,   // 500 NGN
+            'pro': 150000    // 1500 NGN
+        };
+        const expectedAmount = planAmounts[plan];
+        if (!expectedAmount || data.amount !== expectedAmount) {
+            return res.status(400).json({ message: 'Invalid payment amount or plan.' });
         }
 
         // 4. (Idempotency Check) Prevent re-processing the same transaction
@@ -100,7 +104,7 @@ export async function handleTransactionVerification(req, res){
             transactionNumber: data.id, // Use the ID from Paystack
             status: data.status,
             amount: data.amount,
-        timestamp: now,
+            timestamp: now,
             createdAt: now
         });
 

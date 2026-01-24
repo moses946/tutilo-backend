@@ -1,14 +1,15 @@
 import 'dotenv/config';
-import { GoogleGenAI, Type } from "@google/genai";
+import { FunctionCallingConfigMode, GoogleGenAI, Type } from "@google/genai";
 import { createFlashcardsQuery, createMessageQuery, createQuizQuery } from './query.js';
 import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
-import { handleBulkChunkRetrieval, handleChunkRetrieval, handleSendToVideoGen } from '../utils/utility.js';
-import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, intentPrompt, promptPrefix, videoGenFunctionDeclaration, chatSummarizationPrompt } from '../config/types.js';
+import { handleBulkChunkRetrieval, handleSendToVideoGen } from '../utils/utility.js';
+import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, videoGenFunctionDeclaration, chatSummarizationPrompt } from '../config/types.js';
 import { getModelConfig } from '../config/plans.js';
 import { performance } from 'perf_hooks';
 import { userMap } from '../middleware/authMiddleWare.js';
 import { logTokenUsage } from '../utils/utility.js';
+import { sendStatusToUser } from '../../index.js';
 
 // google genai handler (prefer GOOGLE_API_KEY, fallback to GEMINI_API_KEY)
 const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -21,6 +22,42 @@ export const ai = new GoogleGenAI({
   apiKey
 });
 
+const retrievalToolDeclaration = {
+  name: 'search_notebook',
+  description: `Search the user's uploaded study materials (PDFs, notes, documents) in this notebook. 
+Use this tool FIRST before answering any question about the notebook topic. 
+Returns relevant text chunks with IDs that MUST be cited in your response using [chunkID] format.
+If no relevant results are found, you may fall back to general knowledge but must clarify this to the user.`,
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: {
+        type: Type.STRING,
+        description: 'A semantic search query. Use keywords and concepts from the user question. For best results, rephrase as a statement rather than a question (e.g., "photosynthesis process in plants" instead of "what is photosynthesis?")'
+      }
+    },
+    required: ['query']
+  }
+};
+
+const declineQueryToolDeclaration = {
+  name: 'decline_query',
+  description: 'Use this tool ONLY when the user asks a question completely unrelated to the notebook topic. This politely refuses to answer off-topic questions like weather, sports, cooking, general chat, etc.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      reason: {
+        type: Type.STRING,
+        description: 'Brief explanation of why this is off-topic (e.g., "weather is not related to Biology")',
+      },
+      suggestedTopic: {
+        type: Type.STRING,
+        description: 'A suggested on-topic question the user could ask instead'
+      }
+    },
+    required: ['reason']
+  }
+};
 
 
 // handle concept map generation 
@@ -102,7 +139,7 @@ export const handleFlashcardGeneration = async (chunkRefs, chunks, notebookRef, 
           flashcards: {
             type: Type.ARRAY,
             maxItems: 20,
-            items: { 
+            items: {
               type: Type.OBJECT,
               properties: {
                 type: { type: Type.STRING },
@@ -172,14 +209,61 @@ export const handleChatSummarization = async (existingSummary, messagesToSummari
 }
 
 
-export const handleRunAgent = async (req, data, chatObj, chatRef) => {
+const executeNotebookSearch = async (notebookId, query, vectorDim) => {
+  try {
+    let embedding = await ai.models.embedContent({
+      model: 'gemini-embedding-exp-03-07',
+      contents: [query],
+      taskType: 'RETRIEVAL_QUERY', // Optimized task type
+      config: { outputDimensionality: vectorDim },
+    });
+    let queryVector = embedding.embeddings[0].values;
+
+    let qdrantResults = await qdrantClient.search(notebookId, {
+      vector: queryVector,
+      limit: 5,
+      with_payload: true,
+    });
+
+    if (!qdrantResults || qdrantResults.length === 0) return [];
+
+    let chunkBasePath = `notebooks/${notebookId}/chunks/`;
+    let chunkPaths = qdrantResults.map((result) => (`${chunkBasePath}${result.payload.chunkID}.json`));
+    const chunkDocRefs = qdrantResults.map(r => db.collection('Chunk').doc(r.payload.chunkID));
+
+    let [chunksContent, chunkDocs] = await Promise.all([
+      handleBulkChunkRetrieval(chunkPaths),
+      db.getAll(...chunkDocRefs)
+    ]);
+
+    return chunksContent.map((content, index) => {
+      const chunkId = qdrantResults[index]?.payload?.chunkID;
+      const docData = chunkDocs[index].exists ? chunkDocs[index].data() : {};
+      const text = typeof content === 'string' ? content : JSON.stringify(content);
+
+      return {
+        chunkId,
+        text,
+        metadata: {
+          pageNumber: docData.pageNumber,
+          materialId: docData.materialID?.id,
+          tokenCount: docData.tokenCount
+        }
+      };
+    });
+  } catch (err) {
+    console.error("Retrieval failed:", err);
+    return [];
+  }
+};
+
+
+export const handleRunAgent = async (req, data, chatObj, chatRef, existingSummary) => {
   try {
     const userId = req.user.uid; // Extract ID
     let plan = req.user.subscription;
     var modelLimits = getModelConfig(plan);
-    let history = chatObj.history.slice(0, chatObj.history.length - 1);
-    let intentCompleteMessage = promptPrefix(history, chatObj.chunks);
-    
+
     // naming the chat
     if (chatObj.history.length > 1 && chatRef) {
       const chatDoc = await chatRef.get();
@@ -195,7 +279,7 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
               systemInstruction: chatNamingPrompt(chatObj)
             }
           });
-          
+
           // [INSERT] Log token usage for naming
           await logTokenUsage(userId, namingModel, title.usageMetadata, 'chat_naming');
 
@@ -211,9 +295,6 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
     // ... [EXISTING CODE: setup context, notebookDoc, summary, inlineData] ...
     chatObj.history = chatObj.history || [];
     chatObj.chunks = chatObj.chunks || {};
-    let chunkMetadata = {};
-    let notebookDoc = await db.collection('Notebook').doc(data.notebookID).get();
-    let summary = notebookDoc.exists ? notebookDoc.data().summary : '';
 
     let inlineData;
     if (req.files.length > 0) {
@@ -221,114 +302,22 @@ export const handleRunAgent = async (req, data, chatObj, chatRef) => {
       inlineData = inlineData.map((data) => ({ inlineData: data }));
     }
 
-    let message = [{ text: data.text }];
+    let userMessageContent = [{ text: data.text }];
     if (inlineData) {
-      message = message.concat(inlineData);
-    }
-    message = [{ role: 'user', parts: message }];
-
-    const intentModel = 'gemini-2.5-flash-lite';
-    let response = await ai.models.generateContent({
-      model: intentModel,
-      contents: intentCompleteMessage.concat(message),
-      config: {
-        thinkingConfig: { thinkingBudget: 0 },
-        systemInstruction: intentPrompt(summary),
-        responseMimeType: 'application/json',
-        // ... schema ...
-        responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              isInDomain: { type: Type.BOOLEAN },
-              messageIfOutOfDomain: { type: Type.STRING },
-              retrievalNeeded: { type: Type.BOOLEAN },
-              ragQuery: { type: Type.STRING }
-            },
-            propertyOrdering: [
-              'isInDomain',
-              'messageIfOutOfDomain',
-              'retrievalNeeded',
-              'ragQuery'
-            ]
-          }
-      }
-    });
-
-    // [INSERT] Log token usage for intent detection
-    await logTokenUsage(userId, intentModel, response.usageMetadata, 'intent_detection');
-
-    let intentResult = JSON.parse(response.text);
-    var aiMessageRef = db.collection('Message').doc();
-
-    if (!intentResult.isInDomain && intentResult.messageIfOutOfDomain) {
-      // ... [EXISTING CODE: handle out of domain] ...
-      chatObj.history.push({
-        role: "model",
-        parts: [
-          {
-            text: intentResult.messageIfOutOfDomain,
-          },
-        ],
-      });
-      aiMessageRef.set({
-        chatID: chatRef,
-        content: JSON.stringify([{ text: intentResult.messageIfOutOfDomain }]),
-        references: [],
-        attachments: [],
-        role: 'model',
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
-      });
-      let agentResponse = { message: intentResult.messageIfOutOfDomain };
-      return agentResponse;
+      userMessageContent = userMessageContent.concat(inlineData);
     }
 
-    if (intentResult.retrievalNeeded) {
-      // ... [EXISTING CODE: Embedding and Retrieval logic] ...
-      // NOTE: embedContent usage metadata is often null in current SDK versions, so we skip logging it here for now unless critical.
-      let embedding = await ai.models.embedContent({
-        model: 'gemini-embedding-exp-03-07',
-        contents: [intentResult.ragQuery],
-        taskType: 'QUESTION_ANSWERING',
-        config: { outputDimensionality: modelLimits.vectorDim },
-      });
-      let queryVector = embedding.embeddings[0].values;
-      // ... [EXISTING CODE: Qdrant search, chunk processing] ...
-      let qdrantResults = await qdrantClient.search(data.notebookID, {
-        vector: queryVector,
-        limit: 5,
-        with_payload: true,
-      });
 
-      let chunkBasePath = `notebooks/${data.notebookID}/chunks/`;
-      let chunkPaths = qdrantResults.map((result) => (`${chunkBasePath}${result.payload.chunkID}.json`));
-      
-      const chunkDocRefs = qdrantResults.map(r => db.collection('Chunk').doc(r.payload.chunkID));
-      let [chunks, chunkDocs] = await Promise.all([
-        handleBulkChunkRetrieval(chunkPaths),
-        db.getAll(...chunkDocRefs) 
-      ]);
-      chunks.forEach((chunkText, index) => {
-        const chunkId = qdrantResults[index]?.payload?.chunkID;
-        const chunkDoc = chunkDocs[index];
+    var agentResponse = await agentLoop(
+      req.user.uid,
+      chatObj,
+      chatRef,
+      userMessageContent,
+      existingSummary,
+      data.notebookID // Pass notebookID for the tool
+    );
 
-        if (chunkId && chunkDoc.exists) {
-          const docData = chunkDoc.data();
-          const text = typeof chunkText === 'string' ? chunkText : JSON.stringify(chunkText);
-          chatObj.chunks[chunkId] = text.slice(0, 500);
-
-          chunkMetadata[chunkId] = {
-            chunkId: chunkId,
-            pageNumber: docData.pageNumber,
-            materialId: docData.materialID.id, 
-            tokenCount: docData.tokenCount
-          };
-        }
-      });
-    }
-
-    var agentResponse = await agentLoop(req.user.uid, chatObj, chatRef, message, summary);
-
-    return { ...agentResponse, chunkMetadata };
+    return agentResponse;
   } catch (err) {
     console.log(`[ERROR]: handleAgent:${err}`);
     throw Error(err);
@@ -362,24 +351,24 @@ RULES:
         systemInstruction: `You are an AI quiz generator.`,
         responseMimeType: 'application/json',
         responseSchema: {
-            // ... schema ...
-            type: Type.ARRAY,
-            items: {
-                type: Type.OBJECT,
-                properties: {
-                question: { type: Type.STRING },
-                choices: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                    minItems: 4,
-                    maxItems: 4
-                },
-                answer: { type: Type.STRING }
-                },
-                required: ['question', 'choices', 'answer']
+          // ... schema ...
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              question: { type: Type.STRING },
+              choices: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                minItems: 4,
+                maxItems: 4
+              },
+              answer: { type: Type.STRING }
             },
-            minItems: 10,
-            maxItems: 10
+            required: ['question', 'choices', 'answer']
+          },
+          minItems: 10,
+          maxItems: 10
         }
       }
     });
@@ -413,147 +402,191 @@ RULES:
  * }
  */
 
-export async function agentLoop(userId, chatObj, chatRef, message = [], summary = '') {
+export async function agentLoop(userId, chatObj, chatRef, messageContent = [], summary = '', notebookId) {
   var userObj = userMap.get(userId);
   var plan = userObj.plan;
   var modelLimits = getModelConfig(plan);
-  let prompt = agentPrompt(userObj, summary);
-  let completeMessage = promptPrefix(chatObj.history.slice(0, chatObj.history.length - 1), chatObj.chunks, summary);
-  var agentResponse;
-  var isMedia = false;
-  var aiMessageRef;
-  
-  while (true) {
-    agentResponse = await ai.models.generateContent({
+  // 1. Construct Context
+  // We include previous chunks in the system prompt area so the model knows what it already has
+  const retrievedChunkText = Object.values(chatObj.chunks).join("\n\n");
+
+  // DEBUG LOGGING - Check if prompt data is populated
+  console.log(`[Agent Debug] Summary: "${summary || 'EMPTY'}"`);
+  console.log(`[Agent Debug] UserObj:`, JSON.stringify({
+    firstName: userObj?.firstName,
+    plan: userObj?.plan,
+    learningPreferences: userObj?.learningPreferences
+  }));
+
+  let systemPromptText = agentPrompt(userObj, summary);
+  if (retrievedChunkText) {
+    systemPromptText += `\n\n<PREVIOUSLY_RETRIEVED_CONTEXT>\n${retrievedChunkText}\n</PREVIOUSLY_RETRIEVED_CONTEXT>`;
+  }
+
+  // 2. Prepare History
+  // Gemini expects history to alternate User/Model. 
+  // We slice off the last element if it's the current user message (caller handles pushing current message usually, but let's standardize)
+  // In `ChatController`, we pushed the user message to history. So `chatObj.history` contains the latest message at the end.
+  // We need to separate it for `generateContent` which takes `contents` (history + new msg).
+
+  const historyForModel = chatObj.history.slice(0, -1); // All except last
+  const currentTurn = [{ role: 'user', parts: messageContent }]; // The last message
+
+  const tools = [
+    { functionDeclarations: [retrievalToolDeclaration, videoGenFunctionDeclaration, declineQueryToolDeclaration] }
+  ];
+
+  let turnCount = 0;
+  const MAX_TURNS = 5; // Prevent infinite loops
+  let finalResponseText = "";
+  let isMedia = false;
+  let aiMessageRef;
+  let collectedMetadata = {}; // To send back to UI for citations
+
+  // Start the ReAct Loop
+  let currentContents = [...historyForModel, ...currentTurn];
+
+  while (turnCount < MAX_TURNS) {
+    // Force tool call on first turn to ensure notebook search happens
+    const toolConfig = turnCount === 0 ? {
+      functionCallingConfig: {
+        mode: FunctionCallingConfigMode.AUTO,
+        // allowedFunctionNames: ['search_notebook', 'video_gen', 'decline_query']
+      }
+    } : undefined;
+
+    const response = await ai.models.generateContent({
       model: modelLimits.agentModel,
-      contents: completeMessage.concat(message),
+      contents: currentContents,
+
       config: {
+        temperature: 0.7,
+        tools: tools,
+        toolConfig: toolConfig,
         thinkingConfig: {
           thinkingBudget: modelLimits.thinkingBudget
         },
-        systemInstruction: prompt,
-        tools: [
-          {
-            functionDeclarations: [videoGenFunctionDeclaration]
-          }
-        ]
-      }
+        systemInstruction: systemPromptText,
+      } // Allow some creativity
     });
 
-    // [INSERT] Log token usage
-    await logTokenUsage(userId, modelLimits.agentModel, agentResponse.usageMetadata, 'agent_chat_loop');
+    // Log token usage
+    await logTokenUsage(userId, modelLimits.agentModel, response.usageMetadata, 'agent_chat_loop');
+    const responseContent = response.candidates[0].content;
+    const responseParts = responseContent.parts || [];
 
-    if (agentResponse.functionCalls && agentResponse.functionCalls.length > 0) {
-      // ... [EXISTING CODE: Handle function calls] ...
-      const functionCall = agentResponse.functionCalls[0];
-      var functionResponsePart;
-      if (functionCall.name == 'video_gen') {
-        try {
-          if (plan == 'free') {
-            functionResponsePart = {
-              name: functionCall.name,
-              response: {
-                result: "video generation failed, free tier cannot generate videos",
-              },
-            };
-            // ... [EXISTING CODE]
-            chatObj.history.push({
-                role: "system",
-                parts: [
-                  {
-                    functionResponse: functionResponsePart,
-                  },
-                ],
-              });
-              message.push({
-                role: "system",
-                parts: [
-                  {
-                    functionResponse: functionResponsePart,
-                  },
-                ],
-              },)
-              await createMessageQuery({ content: functionResponsePart, role: 'system', chatRef })
-              continue
-          }
-          let data = { args: functionCall.args, uid: userId, chatId: chatRef.id }
-          const response = await handleSendToVideoGen(data);
-          if (!response.ok) {
-            functionResponsePart = {
-              name: functionCall.name,
-              response: {
-                result: "video generation failed, internal server error",
-              },
-            };
-            console.error("Error sending function call to video gen server:", response.status, response.statusText);
-          } else {
-            const data = await response.json();
-            isMedia = true;
-          }
-        } catch (err) {
-            // ...
-            functionResponsePart = {
-                name: functionCall.name,
-                response: {
-                  result: `video generation failed. [ERROR]:${err}`,
-                },
-              };
-              console.error("Failed to send function call to video gen server:", err);
+    // Add model's thought/call to history for next iteration
+    currentContents.push(responseContent);
+
+    // Check for Function Calls
+    const functionCalls = responseParts.filter(part => part.functionCall);
+
+
+    if (functionCalls.length > 0) {
+      const functionResponses = [];
+      for (const call of functionCalls) {
+        const fn = call.functionCall;
+        console.log(`[Agent] Calling Tool: ${fn.name}`);
+
+        // Log tool usage to DB (visible in chat)
+        await createMessageQuery({ content: fn, role: 'model', chatRef });
+
+        if (fn.name === 'search_notebook') {
+          sendStatusToUser(userId, 'Searching your notes...');
+          const query = fn.args.query;
+          const results = await executeNotebookSearch(notebookId, query, modelLimits.vectorDim);
+          sendStatusToUser(userId, 'Analyzing results...');
+
+          // Store results in chatObj for persistence
+          results.forEach(r => {
+            chatObj.chunks[r.chunkId] = r.text;
+            collectedMetadata[r.chunkId] = r.metadata;
+          });
+
+          const resultText = results.length > 0
+            ? `SEARCH RESULTS (Use these to answer and CITE them as [chunkID]):\n\n` +
+            results.map(r => `--- SOURCE START (ID: ${r.chunkId}) ---\n${r.text}\n--- SOURCE END ---`).join('\n\n')
+            : "No relevant information found in the notebook.";
+          functionResponses.push({
+            functionResponse: {
+              name: 'search_notebook',
+              response: { result: resultText }
+            }
+          });
         }
-
+        else if (fn.name === 'video_gen') {
+          try {
+            if (plan == 'free') {
+              functionResponses.push({
+                functionResponse: { name: 'video_gen', response: { result: "Failed: Free tier." } }
+              });
+            } else {
+              let data = { args: fn.args, uid: userId, chatId: chatRef.id };
+              const vidRes = await handleSendToVideoGen(data);
+              if (vidRes.ok) isMedia = true;
+              functionResponses.push({
+                functionResponse: { name: 'video_gen', response: { result: vidRes.ok ? "Video generation started." : "Server Error" } }
+              });
+            }
+          } catch (e) {
+            functionResponses.push({
+              functionResponse: { name: 'video_gen', response: { result: `Error: ${e.message}` } }
+            });
+          }
+        } else if (fn.name === 'decline_query') {
+          // Agent chose to decline the off-topic query
+          const reason = fn.args.reason || 'This question is outside the scope of your notebook.';
+          const suggestion = fn.args.suggestedTopic ? ` Try asking about: "${fn.args.suggestedTopic}"` : '';
+          finalResponseText = `I'm here to help you with your study material! ${reason}${suggestion}`;
+          aiMessageRef = await createMessageQuery({ content: [{ text: finalResponseText }], role: 'model', chatRef });
+          // Exit the loop immediately - no need for function response
+          return {
+            message: finalResponseText,
+            media: false,
+            messageRef: aiMessageRef,
+            chunkMetadata: {}
+          };
+        }
       }
-      chatObj.history.push({
-        role: "model",
-        parts: [
-          {
-            functionCall: functionCall,
-          },
-        ],
+
+      // Add Function Responses to history
+      const toolMessage = { role: 'function', parts: functionResponses };
+      currentContents.push(toolMessage);
+
+      // Log system response to DB
+      // Note: We stringify strictly to ensure it stores in Firestore
+      await createMessageQuery({
+        content: JSON.parse(JSON.stringify(functionResponses)),
+        role: 'system',
+        chatRef
       });
-      await createMessageQuery({ content: functionCall, role: 'model', chatRef })
-      let messagefunc = [
-        agentResponse.candidates[0].content
-      ]
-      if (functionResponsePart) {
-        chatObj.history.push({
-          role: "system",
-          parts: [
-            {
-              functionResponse: functionResponsePart,
-            },
-          ],
-        });
-        messagefunc.push({
-          role: "system",
-          parts: [
-            {
-              functionResponse: functionResponsePart,
-            },
-          ],
-        },)
-        await createMessageQuery({ content: functionResponsePart, role: 'system', chatRef })
-      } else {
-        break;
-      }
-
-      message.push(...messagefunc);
-
 
     } else {
-      chatObj.history.push({ role: "model", parts: [{ text: agentResponse.text }] });
-      aiMessageRef = await createMessageQuery({ content: [{ text: agentResponse.text }], role: 'model', chatRef })
-      break;
+      // No function calls -> Final Answer
+      sendStatusToUser(userId, 'Generating response...');
+      finalResponseText = responseParts.map(p => p.text).join('');
+      aiMessageRef = await createMessageQuery({ content: [{ text: finalResponseText }], role: 'model', chatRef });
+      sendStatusToUser(userId, null); // Clear status
+      break; // Exit loop
     }
+
+    turnCount++;
   }
-  return { message: !isMedia ? agentResponse.text : 'Your video is being created, ready in a bit', media: isMedia, messageRef: aiMessageRef };
+
+  return {
+    message: !isMedia ? finalResponseText : 'Your video is being created, ready in a bit',
+    media: isMedia,
+    messageRef: aiMessageRef,
+    chunkMetadata: collectedMetadata // Return new citations
+  };
 }
 
 export const handleComprehensiveQuizGeneration = async (conceptsWithChunks, userId, numberOfQuestions = 10, difficultyLevel = 'medium') => {
   try {
-    const contextString = conceptsWithChunks.map(c => 
+    const contextString = conceptsWithChunks.map(c =>
       `<CONCEPT_ID: ${c.conceptId}>\n<TOPIC: ${c.conceptName}>\n[CONTENT: ${c.text}]`
     ).join('\n\n');
-    
+
     const prompt = "...";
     const promptText = `
 Generate a multiple-choice quiz based on the provided concepts, strictly adhering to the specified difficulty and quantity constraints.
@@ -591,18 +624,18 @@ RULES:
       config: {
         responseMimeType: 'application/json',
         responseSchema: {
-            // ... schema ...
-            type: Type.ARRAY,
-            items: {
-                type: Type.OBJECT,
-                properties: {
-                question: { type: Type.STRING },
-                choices: { type: Type.ARRAY, items: { type: Type.STRING } },
-                answer: { type: Type.STRING },
-                conceptId: { type: Type.STRING }
-                },
-                required: ['question', 'choices', 'answer', 'conceptId']
-            }
+          // ... schema ...
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              question: { type: Type.STRING },
+              choices: { type: Type.ARRAY, items: { type: Type.STRING } },
+              answer: { type: Type.STRING },
+              conceptId: { type: Type.STRING }
+            },
+            required: ['question', 'choices', 'answer', 'conceptId']
+          }
         },
         thinkingConfig: {
           thinkingBudget: -1

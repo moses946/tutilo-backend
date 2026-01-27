@@ -34,6 +34,19 @@ const server = http.createServer(app);
 
 // WebSocket setup
 export const clientSocketsMap = new Map();
+
+// Helper to send thinking status updates to a user
+export function sendStatusToUser(userId, status) {
+  const sockets = clientSocketsMap.get(userId);
+  if (sockets) {
+    sockets.forEach(ws => {
+      if (ws.readyState === 1) { // WebSocket.OPEN
+        ws.send(JSON.stringify({ event: 'thinking-status', status }));
+      }
+    });
+  }
+}
+
 const wss = new WebSocketServer({ server });
 wss.on('connection', async (ws, req) => {
   let token;

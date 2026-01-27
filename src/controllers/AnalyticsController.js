@@ -72,8 +72,10 @@ export async function handleGetTokenUsageSummary(req, res) {
         const snapshot = await query.orderBy('timestamp', 'desc').limit(1000).get();
 
         // Aggregate by user
+        // Aggregate by user
         const userAggregates = {};
         const featureAggregates = {};
+        const dailyAggregates = {};
 
         snapshot.docs.forEach(doc => {
             const data = doc.data();
@@ -113,6 +115,17 @@ export async function handleGetTokenUsageSummary(req, res) {
             }
             featureAggregates[feature].totalTokens += data.totalTokens || 0;
             featureAggregates[feature].requestCount += 1;
+            // Daily aggregation
+            const dateStr = data.timestamp?.toDate?.()?.toISOString()?.split('T')[0] || 'Unknown Date';
+            if (!dailyAggregates[dateStr]) {
+                dailyAggregates[dateStr] = {
+                    date: dateStr,
+                    totalTokens: 0,
+                    requestCount: 0
+                };
+            }
+            dailyAggregates[dateStr].totalTokens += data.totalTokens || 0;
+            dailyAggregates[dateStr].requestCount += 1;
         });
 
         // Sort users by total tokens descending
@@ -141,7 +154,10 @@ export async function handleGetTokenUsageSummary(req, res) {
         res.json({
             totalRecords: snapshot.docs.length,
             byUser: userList,
-            byFeature: featureList
+            totalRecords: snapshot.docs.length,
+            byUser: userList,
+            byFeature: featureList,
+            dailyUsage: Object.values(dailyAggregates).sort((a, b) => new Date(a.date) - new Date(b.date))
         });
     } catch (err) {
         console.error('[Admin] Token usage summary error:', err);

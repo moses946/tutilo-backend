@@ -1,7 +1,7 @@
 import { handleChatSummarization, handleRunAgent } from "../models/models.js";
 import { createMessageQuery, deleteChatQuery } from "../models/query.js";
 import admin, { bucket, db } from "../services/firebase.js";
-import { handleBulkFileUpload } from "../utils/utility.js";
+import { handleBulkFileUpload, handleContextHydration } from "../utils/utility.js";
 import { LRUCache } from "../utils/lruCache.js";
 // In memory chat map store
 /* 
@@ -131,13 +131,42 @@ export async function handleCreateMessage(req, res) {
         let data = req.body;
         let chatID = req.params.chatID;
         let chatRef = db.collection('Chat').doc(chatID);
-        const uid = req.user.uid; // Get UID from middleware
+        const uid = req.user.uid;
 
-        // ... [EXISTING CODE: fetch summary, handle files] ...
+        // 1. Fetch Chat Metadata
         const chatDocSnap = await chatRef.get();
+        if (!chatDocSnap.exists) {
+            return res.status(404).json({ error: "Chat not found" });
+        }
         const chatData = chatDocSnap.data();
-        let existingSummary = chatData.summary || '';
 
+        // Fetch notebook summary from the Notebook document (not Chat)
+        let notebookSummary = '';
+        if (chatData.notebookID) {
+            const notebookDoc = await chatData.notebookID.get();
+            if (notebookDoc.exists) {
+                notebookSummary = notebookDoc.data().summary || '';
+            }
+        }
+        let existingSummary = notebookSummary;
+
+        // 2. STATE HYDRATION STRATEGY
+        // If this container doesn't have the chat in memory, fetch history from DB
+        if (!chatMap.has(chatID)) {
+            console.log(`[State] Hydrating context for chat: ${chatID}`);
+            const hydratedContext = await handleContextHydration(chatID, chatRef);
+            chatMap.set(chatID, hydratedContext);
+        }
+
+        let chatObj = chatMap.get(chatID);
+
+        // Safety check if hydration returned malformed data
+        if (!Array.isArray(chatObj.history)) {
+            chatObj.history = [];
+            chatMap.set(chatID, chatObj);
+        }
+
+        // ... [Handle Files Logic - Keep Existing] ...
         let files;
         if (req.files) {
             files = req.files;
@@ -145,47 +174,76 @@ export async function handleCreateMessage(req, res) {
             files = await handleBulkFileUpload(files, attachmentBasePath);
         }
 
-        createMessageQuery({ chatRef, content: [{ text: data.text }], role: 'user', attachments: files })
+        // 3. Save User Message to DB
+        await createMessageQuery({ chatRef, content: [{ text: data.text }], role: 'user', attachments: files });
+
+        // 4. Update In-Memory State
         let message = { role: 'user', parts: [{ text: data.text }] };
-
-        if (!chatMap.has(chatID)) {
-            chatMap.set(chatID, { history: [], chunks: {} })
-        };
-        let chatObj = chatMap.get(chatID);
-        if (!Array.isArray(chatObj.history)) {
-            chatObj.history = [];
-            chatMap.set(chatID, chatObj);
-        }
-
-        const CONTEXT_WINDOW_SIZE = 10;
         chatObj.history.push(message);
 
-        if (chatObj.history.length > CONTEXT_WINDOW_SIZE * 2) {
-            console.log(`[ChatController] Summarizing chat ${chatID}...`);
-            const cutOffIndex = chatObj.history.length - CONTEXT_WINDOW_SIZE;
+        // --- Token-Based Summarization Logic ---
+        const MAX_CONTEXT_TOKENS = 100000;   // Trigger summarization above this
+        const TARGET_CONTEXT_TOKENS = 50000; // Trim down to approximately this
+        const CHARS_PER_TOKEN = 4;           // Approximation for token estimation
+
+        const countTokens = (history) => {
+            let charCount = 0;
+            for (const msg of history) {
+                const text = msg.parts?.[0]?.text || '';
+                charCount += text.length;
+            }
+            return Math.ceil(charCount / CHARS_PER_TOKEN);
+        };
+
+        const currentTokens = countTokens(chatObj.history);
+
+        if (currentTokens > MAX_CONTEXT_TOKENS) {
+            console.log(`[Summarization] Chat ${chatID}: Triggering summarization. Current tokens: ${currentTokens} (limit: ${MAX_CONTEXT_TOKENS})`);
+
+            // Find cutoff point to get below TARGET_CONTEXT_TOKENS
+            let tokensToRemove = currentTokens - TARGET_CONTEXT_TOKENS;
+            let cutOffIndex = 0;
+            let removedTokens = 0;
+
+            for (let i = 0; i < chatObj.history.length; i++) {
+                const msgText = chatObj.history[i].parts?.[0]?.text || '';
+                removedTokens += Math.ceil(msgText.length / CHARS_PER_TOKEN);
+                cutOffIndex = i + 1;
+                if (removedTokens >= tokensToRemove) break;
+            }
+
             const messagesToSummarize = chatObj.history.slice(0, cutOffIndex);
             const recentMessages = chatObj.history.slice(cutOffIndex);
 
-            // [MODIFIED CALL]
+            console.log(`[Summarization] Chat ${chatID}: Summarizing ${messagesToSummarize.length} messages (~${removedTokens} tokens). Keeping ${recentMessages.length} recent messages.`);
+
             const newSummary = await handleChatSummarization(existingSummary, messagesToSummarize, uid);
 
             await chatRef.update({ summary: newSummary });
             existingSummary = newSummary;
-            chatObj.history = recentMessages;
 
-            console.log(`[ChatController] Summary updated.`);
+            // Update the in-memory history
+            chatObj.history = recentMessages;
+            chatMap.set(chatID, chatObj);
+
+            const newTokens = countTokens(chatObj.history);
+            console.log(`[Summarization] Chat ${chatID}: Complete. New token count: ${newTokens}. Summary length: ${newSummary?.length || 0} chars.`);
         }
 
+        // 5. Run Agent
+        // Pass a copy of history to avoid mutation issues during async operations
         let agentContextObj = {
             ...chatObj,
             history: [...chatObj.history]
         };
 
-        // Note: handleRunAgent accesses req.user.uid internally
         result = await handleRunAgent(req, data, agentContextObj, chatRef, existingSummary);
 
+        // 6. Update History with AI Response
         if (result.message) {
             chatObj.history.push({ role: 'model', parts: [{ text: result.message }] });
+            // Update LRU freshness
+            chatMap.set(chatID, chatObj);
         }
     } catch (err) {
         console.log(`ERROR--creating message:${err}`);

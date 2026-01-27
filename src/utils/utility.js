@@ -1,15 +1,15 @@
 import multer from 'multer';
-import admin, {bucket, db} from '../services/firebase.js';
-import {ai} from '../models/models.js'
+import admin, { bucket, db } from '../services/firebase.js';
+import { ai } from '../models/models.js'
 import qdrantClient from '../services/qdrant.js'
-import {v4} from 'uuid'
+import { v4 } from 'uuid'
 import { deleteChatQuery, deleteNotebookQuery, updateNotebookWithNewMaterialQuery } from '../models/query.js';
 // multer storage
 const storage = multer.memoryStorage();
 export const upload = multer({ storage });
 
-export const handleFileUpload = async (file, path)=>{
-    try{
+export const handleFileUpload = async (file, path) => {
+    try {
         const destinationPath = `${path}`;
         const blob = bucket.file(path);
         await blob.save(file.buffer, {
@@ -19,25 +19,25 @@ export const handleFileUpload = async (file, path)=>{
             resumable: false,
         });
         await blob.makePublic()
-        return { mediaUrl: blob.publicUrl(), name: file.originalname, size: file.size, type:file.mimetype};
-    }catch(err){
+        return { mediaUrl: blob.publicUrl(), name: file.originalname, size: file.size, type: file.mimetype };
+    } catch (err) {
         console.log(`Error in handleFileUpload func:${err}`);
         throw err;
     }
 }
 
-export const handleBulkFileUpload = async (files, basePath)=>{
-    const uploads = files.map((file)=>{
+export const handleBulkFileUpload = async (files, basePath) => {
+    const uploads = files.map((file) => {
         const safeName = file.originalname;
         const destination = `${basePath}/${safeName}`;
         return handleFileUpload(file, destination);
     });
     return Promise.all(uploads);
 }
- 
-export const handleBulkChunkUpload = async (chunks, basePath)=>{
+
+export const handleBulkChunkUpload = async (chunks, basePath) => {
     // chunks: Array<{ name: string, chunks: Array<{pageNumber:number, text:string, tokenCount:number}> }>
-    const uploads = chunks.map(async (item)=>{
+    const uploads = chunks.map(async (item) => {
         const safeName = `${item.name}.json`;
         const destination = `${basePath}/${safeName}`;
         const payload = Buffer.from(JSON.stringify(item.text), 'utf-8');
@@ -74,7 +74,7 @@ export const handleChunkRetrieval = async (path) => {
     }
 }
 
-export const handleBulkChunkRetrieval = async (paths)=>{
+export const handleBulkChunkRetrieval = async (paths) => {
     // Given an array of storage paths, retrieve all chunk contents in parallel
     // Returns: Array of chunk contents (parsed JSON or string)
     try {
@@ -112,18 +112,18 @@ export const generateSignedUrl = async (path, expiresInSeconds = 3600) => {
   Output:An array of objects holding metadata and embedding of the text content 
 
 */
-export const handleEmbedding = async (pages)=>{
-    pages = pages.map((page ,index)=>page.text)
+export const handleEmbedding = async (pages) => {
+    pages = pages.map((page, index) => page.text)
     const response = await ai.models.embedContent(
         {
-            model:'gemini-embedding-exp-03-07',
-            contents:pages,
+            model: 'gemini-embedding-exp-03-07',
+            contents: pages,
             taskType: 'RETRIEVAL_DOCUMENT',
             outputDimensionality: 256,
         }
     );
     return response.embeddings
-    
+
 }
 
 /*
@@ -131,8 +131,8 @@ export const handleEmbedding = async (pages)=>{
   Input: chunks: Array of chunk objects with text content, chunkRefs: Array of chunk document references
   Output: Array of Qdrant point IDs
 */
-export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collectionName = 'notebook_chunks', vectorDim=256) => {
-    try { 
+export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collectionName = 'notebook_chunks', vectorDim = 256) => {
+    try {
         // Extract text content from chunks
         // Batch functionality: process up to 100 chunks per embedding request
         const texts = chunks.map(chunk => chunk.text);
@@ -152,22 +152,22 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
             }
         }
         // For downstream code compatibility, mimic the original response object
-        const response = { embeddings: allEmbeddings };        
+        const response = { embeddings: allEmbeddings };
         // Prepare points for Qdrant with chunkID in payload
         const points = response.embeddings.map((embedding, index) => ({
             //  Unique ID
-            id:v4(),
+            id: v4(),
             vector: embedding.values,
             payload: {
                 chunkID: chunkRefs[index].id,
                 createdAt: new Date().toISOString()
             }
         }));
-        
+
         // Ensure collection exists
         try {
             let collection = await qdrantClient.getCollection(collectionName);
-            if(!collection){
+            if (!collection) {
                 await qdrantClient.createCollection(collectionName, {
                     vectors: {
                         size: vectorDim,
@@ -187,11 +187,11 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
                 throw error;
             }
         }
-        
+
         // Upload points to Qdrant in batches
         let batchSize = 100;
         const uploadedPoints = [];
-        
+
         for (let i = 0; i < points.length; i += batchSize) {
             const batch = points.slice(i, i + batchSize);
             const result = await qdrantClient.upsert(collectionName, {
@@ -202,58 +202,58 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
             uploadedPoints.push(...batch.map(point => point.id));
         }
         return uploadedPoints;
-        
+
     } catch (error) {
         console.error('Error in handleChunkEmbeddingAndStorage:', error);
         throw error;
     }
 }
 
-export const handleNotebookUpdate = async(notebookID, materialRefs)=>{
+export const handleNotebookUpdate = async (notebookID, materialRefs) => {
     const notebookRef = db.collection('Notebook').doc(notebookID);
-  
+
     await updateNotebookWithNewMaterialQuery(notebookRef, materialRefs);
 }
 
-export const handleNotebookDeletion = async (notebookId)=>{
-    try{
+export const handleNotebookDeletion = async (notebookId) => {
+    try {
 
         // get the chats and bulk delete
         let chatSnaps = await db.collection('Chat').where('notebookID', '==', notebookId).get();
-        let chatIds = chatSnaps.docs.map((doc)=>doc.id);
+        let chatIds = chatSnaps.docs.map((doc) => doc.id);
         await handleBulkDeleteChat(notebookId, chatIds);
-        await bucket.deleteFiles({prefix:`notebooks/${notebookId}/`});
-        await bucket.deleteFiles({prefix:`videos/${notebookId}/`})
+        await bucket.deleteFiles({ prefix: `notebooks/${notebookId}/` });
+        await bucket.deleteFiles({ prefix: `videos/${notebookId}/` })
         // delete the qdrant collection
         await qdrantClient.deleteCollection(notebookId);
         await deleteNotebookQuery(notebookId);
-    }catch(err){
+    } catch (err) {
         // switch it back to isDeleted false
         console.error('Notebook deletion failed:', err);
     }
 }
 
-export const handleBulkNotebookDeletion = async (notebookIDs) =>{
-    try{
-        await Promise.all(notebookIDs.map((id)=>handleNotebookDeletion(id)));
-    }catch (err){
+export const handleBulkNotebookDeletion = async (notebookIDs) => {
+    try {
+        await Promise.all(notebookIDs.map((id) => handleNotebookDeletion(id)));
+    } catch (err) {
         console.log(`Error in bulk deletions`);
     }
 }
 
-export const handleSearchForDeletedNotebooks = async ()=>{
+export const handleSearchForDeletedNotebooks = async () => {
     /**
      * This function is to be used by the cron job to scan for deleted notebooks and pass the ids to the bulk deletion helper function
      */
     let notebookSnaps = await db.collection('Notebook').where('isDeleted', '==', true).get()
-    let notebookIds = notebookSnaps.docs.map((doc)=>doc.id);
+    let notebookIds = notebookSnaps.docs.map((doc) => doc.id);
     return notebookIds
 
 }
 
 export const handleSearchForDeletedUsers = async () => {
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    
+
     // OPTIMIZATION: Added .limit(200)
     // It is better to process 200 users every minute successfully 
     // than try to process 5000 and crash.
@@ -261,7 +261,7 @@ export const handleSearchForDeletedUsers = async () => {
         .collection('User')
         .where('isDeleted', '==', true)
         .where('deletedAt', '<=', oneDayAgo)
-        .limit(200) 
+        .limit(200)
         .get();
 
     return userSnaps.docs.map(doc => doc.id);
@@ -285,7 +285,7 @@ export const handleBulkDeleteUsers = async (userIds = []) => {
     // Note: If userIds.length > 250, you must chunk this loop 
     // because Firestore allows max 500 ops per batch (250 users * 2 ops = 500).
     // Assuming the search limit is 200, this is safe.
-    
+
     const batch = db.batch();
 
     userIds.forEach(userId => {
@@ -301,11 +301,11 @@ export const handleBulkDeleteUsers = async (userIds = []) => {
 };
 
 // Helper to chunk arrays
-const chunkArray = (arr, size) => 
+const chunkArray = (arr, size) =>
     Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
-      arr.slice(i * size, i * size + size)
-);
-  
+        arr.slice(i * size, i * size + size)
+    );
+
 export const handleBulkNotebookIdRetrieval = async (userIds = []) => {
     if (!userIds.length) return [];
 
@@ -323,41 +323,41 @@ export const handleBulkNotebookIdRetrieval = async (userIds = []) => {
     });
 
     const snaps = await Promise.all(retrievalPromises);
-    
+
     // Flatten results
     return snaps.flatMap(snap => snap.docs.map(doc => doc.id));
 };
-export const handleDeleteChat = async (notebookId, chatId)=>{
-     // delete chat related stuff on db
-     await deleteChatQuery(chatId);
-     await bucket.deleteFiles({prefix:`notebooks/${notebookId}/chats/${chatId}/`})
+export const handleDeleteChat = async (notebookId, chatId) => {
+    // delete chat related stuff on db
+    await deleteChatQuery(chatId);
+    await bucket.deleteFiles({ prefix: `notebooks/${notebookId}/chats/${chatId}/` })
 }
 
-export const handleBulkDeleteChat = async (notebookId, chatIds)=>{
-    try{
+export const handleBulkDeleteChat = async (notebookId, chatIds) => {
+    try {
         await Promise.all(
-            chatIds.map(async (chatId)=>{
+            chatIds.map(async (chatId) => {
                 await handleDeleteChat(notebookId, chatId)
             })
         )
-    }catch(err){
+    } catch (err) {
         console.log(`[ERROR]:Bulk delete chat:${err}`);
     }
 }
 
-export const handleSendToVideoGen = async (data)=>{
+export const handleSendToVideoGen = async (data) => {
     const response = await fetch('https://video-gen-1088390451754.us-east4.run.app/render', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...data.args, userID: data.uid, chatID: data.chatId })
-      });
+    });
     return response
 }
 
 
 export const logTokenUsage = async (userId, model, usageMetadata, feature) => {
     if (!userId || !usageMetadata) return;
-    
+
     const inputTokens = usageMetadata.promptTokenCount || 0;
     const outputTokens = usageMetadata.candidatesTokenCount || 0;
     const totalTokens = usageMetadata.totalTokenCount || (inputTokens + outputTokens);
@@ -387,7 +387,7 @@ export const handleNotebookDetailedSummary = async (notebookId, userId) => {
         // 1. Get the notebook document
         const notebookRef = db.collection('Notebook').doc(notebookId);
         const notebookSnap = await notebookRef.get();
-        
+
         if (!notebookSnap.exists) {
             throw new Error(`Notebook with ID ${notebookId} not found`);
         }
@@ -404,7 +404,7 @@ export const handleNotebookDetailedSummary = async (notebookId, userId) => {
         const chunkMetadata = [];
 
         const materialSnaps = await Promise.all(materialRefs.map(ref => ref.get()));
-        
+
         for (let i = 0; i < materialSnaps.length; i++) {
             const materialSnap = materialSnaps[i];
             if (!materialSnap.exists) continue;
@@ -434,7 +434,7 @@ export const handleNotebookDetailedSummary = async (notebookId, userId) => {
 
         const chunkBasePath = `notebooks/${notebookId}/chunks/`;
         const chunkPaths = allChunkRefs.map(chunkRef => `${chunkBasePath}${chunkRef.id}.json`);
-        
+
         const chunkContents = await handleBulkChunkRetrieval(chunkPaths);
 
         const formattedChunks = chunkContents.map((chunkContent, index) => {
@@ -485,14 +485,14 @@ export const handleNotebookDetailedSummary = async (notebookId, userId) => {
 
         **Generate the lecture script now:**
         `;
-        
+
         const systemInstruction = {
             role: 'system',
-            parts: [{ 
+            parts: [{
                 text: `You are Professor Einstein, an expert educational content analyzer. 
                 Your persona is warm, authoritative, and engaging. 
                 You specialize in synthesizing complex educational content into clear, spoken-word style lectures for university students. 
-                You prioritize accuracy and clarity over jargon.` 
+                You prioritize accuracy and clarity over jargon.`
             }]
         };
 
@@ -505,12 +505,12 @@ export const handleNotebookDetailedSummary = async (notebookId, userId) => {
 
         const modelName = 'gemini-2.5-flash';
         const response = await ai.models.generateContent({
-            model: modelName, 
+            model: modelName,
             systemInstruction: systemInstruction,
             generationConfig: generationConfig,
-            contents: [{ 
-                role: 'user', 
-                parts: [{ text: summaryPrompt }] 
+            contents: [{
+                role: 'user',
+                parts: [{ text: summaryPrompt }]
             }]
         });
 
@@ -527,3 +527,53 @@ export const handleNotebookDetailedSummary = async (notebookId, userId) => {
         throw err;
     }
 }
+
+/*
+  Hydrate chat context from Firestore if missing in memory.
+  Returns the chat object { history: [], chunks: {} }
+*/
+export const handleContextHydration = async (chatId, chatRef) => {
+    try {
+        // Fetch last 20 messages to rebuild context
+        const snapshot = await db.collection('Message')
+            .where('chatID', '==', chatRef)
+            .orderBy('timestamp', 'desc')
+            .limit(20)
+            .get();
+
+        if (snapshot.empty) {
+            return { history: [], chunks: {} };
+        }
+
+        // Convert Firestore docs to Gemini history format
+        const pastMessages = snapshot.docs.map(doc => {
+            const data = doc.data();
+            let content;
+            try {
+                content = JSON.parse(data.content);
+            } catch (e) {
+                // Handle legacy plain text if any
+                content = [{ text: data.content }];
+            }
+
+            // Map 'assistant' or other roles to 'model' for Gemini
+            const role = data.role === 'user' ? 'user' : 'model';
+
+            // Filter out system messages that might confuse the history reconstruction
+            if (data.role === 'system') return null;
+
+            return {
+                role: role,
+                parts: content
+            };
+        }).filter(msg => msg !== null).reverse(); // Reverse to chronological order
+
+        return {
+            history: pastMessages,
+            chunks: {} // Chunks are transient for RAG, we start fresh or could persist them if needed
+        };
+    } catch (err) {
+        console.error(`[Hydration Error] Failed to hydrate chat ${chatId}:`, err);
+        return { history: [], chunks: {} };
+    }
+};

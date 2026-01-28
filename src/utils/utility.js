@@ -142,7 +142,8 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
             const batchTexts = texts.slice(i, i + embeddingBatchSize);
             embeddingBatchSize = Math.min(embeddingBatchSize, texts.length - i);
             const response = await ai.models.embedContent({
-                model: 'gemini-embedding-exp-03-07',
+                // model: 'gemini-embedding-exp-03-07',
+                model: 'gemini-embedding-001',
                 contents: batchTexts,
                 taskType: 'RETRIEVAL_DOCUMENT',
                 config: { outputDimensionality: vectorDim },

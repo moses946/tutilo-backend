@@ -289,10 +289,12 @@ export async function handleReadMessages(req, res) {
     if (!beforeTimestamp) {
         let chatObj = chatMap.get(chatID);
         // Only cache the raw "history" format expected by Gemini
-        const historyForCache = messages.map(m => ({
-            role: m.role,
-            parts: m.parts
-        }));
+        const historyForCache = messages
+            .filter(m => m.role !== 'system') // Filter out system messages
+            .map(m => ({
+                role: m.role === 'user' ? 'user' : 'model', // Normalize role
+                parts: m.parts
+            }));
 
         if (chatObj) {
             chatObj.history = historyForCache;

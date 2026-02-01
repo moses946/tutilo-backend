@@ -116,7 +116,7 @@ export const handleEmbedding = async (pages) => {
     pages = pages.map((page, index) => page.text)
     const response = await ai.models.embedContent(
         {
-            model: 'gemini-embedding-exp-03-07',
+            model: 'gemini-embedding-001',
             contents: pages,
             taskType: 'RETRIEVAL_DOCUMENT',
             outputDimensionality: 256,

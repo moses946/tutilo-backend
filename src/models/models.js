@@ -550,7 +550,7 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
       }
 
       // Add Function Responses to history
-      const toolMessage = { role: 'function', parts: functionResponses };
+      const toolMessage = { role: 'tool', parts: functionResponses };
       currentContents.push(toolMessage);
 
       // Log system response to DB

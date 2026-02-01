@@ -549,29 +549,50 @@ export const handleContextHydration = async (chatId, chatRef) => {
         // Convert Firestore docs to Gemini history format
         const pastMessages = snapshot.docs.map(doc => {
             const data = doc.data();
-            let content;
-            try {
-                content = JSON.parse(data.content);
-            } catch (e) {
-                // Handle legacy plain text if any
-                content = [{ text: data.content }];
-            }
 
-            // Map 'assistant' or other roles to 'model' for Gemini
-            const role = data.role === 'user' ? 'user' : 'model';
-
-            // Filter out system messages that might confuse the history reconstruction
+            // Skip system messages (function responses, tool logs, etc.)
             if (data.role === 'system') return null;
 
-            return {
-                role: role,
-                parts: content
-            };
+            let parts;
+            try {
+                const parsed = JSON.parse(data.content);
+
+                // Validate: parts must be an array
+                if (!Array.isArray(parsed)) {
+                    // If it's a single object with 'text', wrap it
+                    if (parsed && typeof parsed.text === 'string') {
+                        parts = [{ text: parsed.text }];
+                    } else {
+                        // Skip malformed content (e.g., function call objects stored directly)
+                        console.warn(`[Hydration] Skipping malformed message content in chat ${chatId}`);
+                        return null;
+                    }
+                } else {
+                    // Filter to only valid text parts
+                    parts = parsed.filter(p => p && typeof p.text === 'string');
+                    if (parts.length === 0) {
+                        // No valid text parts, skip this message
+                        return null;
+                    }
+                }
+            } catch (e) {
+                // Handle legacy plain text content
+                if (typeof data.content === 'string') {
+                    parts = [{ text: data.content }];
+                } else {
+                    return null;
+                }
+            }
+
+            // Map roles: only 'user' and 'model' are valid for Gemini
+            const role = data.role === 'user' ? 'user' : 'model';
+
+            return { role, parts };
         }).filter(msg => msg !== null).reverse(); // Reverse to chronological order
 
         return {
             history: pastMessages,
-            chunks: {} // Chunks are transient for RAG, we start fresh or could persist them if needed
+            chunks: {} // Chunks are transient for RAG, we start fresh
         };
     } catch (err) {
         console.error(`[Hydration Error] Failed to hydrate chat ${chatId}:`, err);

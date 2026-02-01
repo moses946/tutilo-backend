@@ -289,12 +289,23 @@ export async function handleReadMessages(req, res) {
     if (!beforeTimestamp) {
         let chatObj = chatMap.get(chatID);
         // Only cache the raw "history" format expected by Gemini
+        // Filter out system messages and validate parts structure
         const historyForCache = messages
             .filter(m => m.role !== 'system') // Filter out system messages
-            .map(m => ({
-                role: m.role === 'user' ? 'user' : 'model', // Normalize role
-                parts: m.parts
-            }));
+            .map(m => {
+                // Validate parts: must be an array with at least one text part
+                let validParts = [];
+                if (Array.isArray(m.parts)) {
+                    validParts = m.parts.filter(p => p && typeof p.text === 'string');
+                }
+                if (validParts.length === 0) return null; // Skip messages without valid text parts
+
+                return {
+                    role: m.role === 'user' ? 'user' : 'model', // Normalize role
+                    parts: validParts
+                };
+            })
+            .filter(m => m !== null);
 
         if (chatObj) {
             chatObj.history = historyForCache;

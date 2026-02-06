@@ -27,10 +27,23 @@ export const handleFileUpload = async (file, path) => {
 }
 
 export const handleBulkFileUpload = async (files, basePath) => {
-    const uploads = files.map((file) => {
-        const safeName = file.originalname;
+    const timestamp = Date.now();
+    const uploads = files.map(async (file, index) => {
+        // Create a unique filename by adding timestamp and index before extension
+        const originalName = file.originalname;
+        const lastDotIndex = originalName.lastIndexOf('.');
+        let safeName;
+        if (lastDotIndex > 0) {
+            const name = originalName.substring(0, lastDotIndex);
+            const ext = originalName.substring(lastDotIndex);
+            safeName = `${name}_${timestamp}_${index}${ext}`;
+        } else {
+            safeName = `${originalName}_${timestamp}_${index}`;
+        }
         const destination = `${basePath}/${safeName}`;
-        return handleFileUpload(file, destination);
+        const uploadResult = await handleFileUpload(file, destination);
+        // Override name with the actual safeName used in storage
+        return { ...uploadResult, name: safeName };
     });
     return Promise.all(uploads);
 }

@@ -212,7 +212,7 @@ export const handleChatSummarization = async (existingSummary, messagesToSummari
 const executeNotebookSearch = async (notebookId, query, vectorDim) => {
   try {
     let embedding = await ai.models.embedContent({
-      model: 'gemini-embedding-exp-03-07',
+      model: 'gemini-embedding-001',
       contents: [query],
       taskType: 'RETRIEVAL_QUERY', // Optimized task type
       config: { outputDimensionality: vectorDim },
@@ -437,7 +437,7 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
   ];
 
   let turnCount = 0;
-  const MAX_TURNS = 5; // Prevent infinite loops
+  const MAX_TURNS = 100; // Prevent infinite loops
   let finalResponseText = "";
   let isMedia = false;
   let aiMessageRef;

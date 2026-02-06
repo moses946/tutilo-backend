@@ -178,10 +178,14 @@ export async function handleNotebookCreation(req, res) {
 
         // 4. Upload to Storage
         const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
-        await handleBulkFileUpload(filesToUpload, noteBookBasePath);
+        const uploadResults = await handleBulkFileUpload(filesToUpload, noteBookBasePath);
 
-        // 5. Create Database Records
-        const materialRefs = await createMaterialQuery(notebookRef, filesToUpload);
+        // 5. Create Database Records - Use actual storage names from upload results
+        const filesWithStoragePaths = filesToUpload.map((file, index) => ({
+            ...file,
+            storageName: uploadResults[index].name // The actual filename in storage
+        }));
+        const materialRefs = await createMaterialQuery(notebookRef, filesWithStoragePaths);
         await updateNotebookWithMaterials(notebookRef, materialRefs);
 
         console.log(`Notebook ${notebookRef.id} created successfully.`);
@@ -391,8 +395,14 @@ export async function handleNotebookUpdate(req, res) {
                 buffer: pf.pdfBuffer
             }));
             const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
-            await handleBulkFileUpload(files, noteBookBasePath);
-            const materialRefs = await createMaterialQuery(notebookRef, filesToUpload);
+            const uploadResults = await handleBulkFileUpload(filesToUpload, noteBookBasePath);
+
+            // Use actual storage names from upload results
+            const filesWithStoragePaths = filesToUpload.map((file, index) => ({
+                ...file,
+                storageName: uploadResults[index].name
+            }));
+            const materialRefs = await createMaterialQuery(notebookRef, filesWithStoragePaths);
             let newChunkRefsCombined = [];
             let newChunksCombined = [];
 

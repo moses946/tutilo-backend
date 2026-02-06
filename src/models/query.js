@@ -1,15 +1,15 @@
-import admin, {db} from '../services/firebase.js';
+import admin, { db } from '../services/firebase.js';
 import qdrantClient from '../services/qdrant.js';
 
 export const createQuizQuery = async (chatId, quizData) => {
-  const chatRef = db.collection('Chat').doc(chatId);
-  const quizPayload = {
-    chatID: chatRef,
-    questions: quizData,
-    dateCreated: admin.firestore.FieldValue.serverTimestamp(),
-  };
-  const quizRef = await db.collection('Quizzes').add(quizPayload);
-  return quizRef;
+    const chatRef = db.collection('Chat').doc(chatId);
+    const quizPayload = {
+        chatID: chatRef,
+        questions: quizData,
+        dateCreated: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    const quizRef = await db.collection('Quizzes').add(quizPayload);
+    return quizRef;
 };
 
 /*
@@ -21,12 +21,12 @@ export const createNotebookQuery = async (notebook) => {
     let now = admin.firestore.FieldValue.serverTimestamp();
     let userRef = db.collection('User').doc(notebook.userID);
     const notebookRef = await db.collection('Notebook').add({
-        summary: notebook.summary? notebook.summary : '',
+        summary: notebook.summary ? notebook.summary : '',
         title: notebook.title,
         userID: userRef,
         dateCreated: now,
         dateUpdated: now,
-        isDeleted:false,
+        isDeleted: false,
         materialRefs: [], // Will be populated with material references
         status: notebook.status || 'processing',
         links: Array.isArray(notebook.links) ? notebook.links : [],
@@ -41,15 +41,15 @@ This function executes the creation of the material entry
 Input:notebookRef: DocumentReference, materials: Array of file objects
 */
 export const createMaterialQuery = async (notebookRef, materials) => {
-    let now = admin.firestore.FieldValue.serverTimestamp();   
+    let now = admin.firestore.FieldValue.serverTimestamp();
     const materialRefs = [];
-    
-    if(materials.length == 1){
+
+    if (materials.length == 1) {
         const materialRef = await db.collection('Material').add({
             notebookID: notebookRef,
             name: materials[0].originalname || materials[0].name,
             status: 'processed',
-            storagePath: materials[0].originalname || materials[0].name,
+            storagePath: materials[0].storageName || materials[0].originalname || materials[0].name,
             dateCreated: now,
             chunkRefs: [] // Will be populated with chunk references
         });
@@ -62,16 +62,16 @@ export const createMaterialQuery = async (notebookRef, materials) => {
                 notebookID: notebookRef,
                 name: material.originalname || material.name,
                 status: 'processed',
-                storagePath: material.originalname || material.name,
+                storagePath: material.storageName || material.originalname || material.name,
                 dateCreated: now,
-                
+
             };
             batch.set(materialRef, materialDoc);
             materialRefs.push(materialRef);
         });
         await batch.commit();
     }
-    
+
     return materialRefs;
 }
 
@@ -82,8 +82,8 @@ Input: chunks: Array of chunk objects, materialRef: DocumentReference
 export const createChunksQuery = async (chunks, materialRef) => {
     let now = admin.firestore.FieldValue.serverTimestamp();
     const chunkRefs = [];
-    
-    if(chunks.length == 1){
+
+    if (chunks.length == 1) {
         const chunkRef = await db.collection('Chunk').add({
             materialID: materialRef,
             pageNumber: chunks[0].pageNumber,
@@ -108,24 +108,24 @@ export const createChunksQuery = async (chunks, materialRef) => {
         });
         await batch.commit();
     }
-    
+
     return chunkRefs;
 }
 
 export const createConceptMapQuery = async (result, notebookRef) => {
     const conceptMapRef = await db.collection('ConceptMap').add({
-        notebookID:notebookRef,
-        graphData:{layout:result, progress:{}},
+        notebookID: notebookRef,
+        graphData: { layout: result, progress: {} },
     })
 }
 
 /* 
 read queries
 */
-export const readNotebooksQuery = async (userID) =>{
+export const readNotebooksQuery = async (userID) => {
     let userRef = db.collection('User').doc(userID);
     // Fetch all notebooks where the userID field matches the given userID
-    let notebookRefs = await db.collection('Notebook').where('userID', '==', userRef).where('isDeleted', '==',false).get();
+    let notebookRefs = await db.collection('Notebook').where('userID', '==', userRef).where('isDeleted', '==', false).get();
     const notebooks = [];
     notebookRefs.forEach(doc => {
         const data = doc.data();
@@ -207,16 +207,16 @@ export const updateChunksWithQdrantIds = async (chunkRefs, qdrantPointIds) => {
     if (chunkRefs.length !== qdrantPointIds.length) {
         throw new Error('Mismatch between chunk references and Qdrant point IDs');
     }
-    
+
     const batch = db.batch();
-    
+
     chunkRefs.forEach((chunkRef, index) => {
         batch.update(chunkRef, {
             qdrantPointId: qdrantPointIds[index],
             dateUpdated: admin.firestore.FieldValue.serverTimestamp()
         });
     });
-    
+
     await batch.commit();
 }
 
@@ -236,115 +236,115 @@ export const updateNotebookWithNewMaterialQuery = async (notebookRef, materialRe
 export const deleteNotebookQuery = async (notebookId) => {
     const notebookRef = db.collection("Notebook").doc(notebookId);
     const notebookSnap = await notebookRef.get();
-  
+
     if (!notebookSnap.exists) {
-      throw new Error(`Notebook with id ${notebookId} does not exist.`);
+        throw new Error(`Notebook with id ${notebookId} does not exist.`);
     }
-  
+
     const { materialRefs = [] } = notebookSnap.data();
-    
+
     // Parallel queries for all related data
     const [materialSnaps, flashcardsSnapshot, chatsSnapshot, conceptMapSnapshot] = await Promise.all([
-      // Get materials
-      Array.isArray(materialRefs) && materialRefs.length > 0
-        ? Promise.all(materialRefs.map((ref) => ref.get()))
-        : Promise.resolve([]),
-      
-      // Get flashcards
-      db.collection('Flashcard')
-        .where('notebookID', '==', notebookRef)
-        .get(),
-      
-      // Get chats
-      db.collection('Chat')
-        .where('notebookID', '==', notebookRef)
-        .get(),
-      db.collection('ConceptMap')
-      .where('notebookID', '==', notebookRef)
-      .get()
+        // Get materials
+        Array.isArray(materialRefs) && materialRefs.length > 0
+            ? Promise.all(materialRefs.map((ref) => ref.get()))
+            : Promise.resolve([]),
+
+        // Get flashcards
+        db.collection('Flashcard')
+            .where('notebookID', '==', notebookRef)
+            .get(),
+
+        // Get chats
+        db.collection('Chat')
+            .where('notebookID', '==', notebookRef)
+            .get(),
+        db.collection('ConceptMap')
+            .where('notebookID', '==', notebookRef)
+            .get()
     ]);
-  
+
     // Collect chunk refs from materials
     const chunkRefs = materialSnaps.flatMap((snap) => {
-      const { chunkRefs = [] } = snap.data() || {};
-      return chunkRefs;
+        const { chunkRefs = [] } = snap.data() || {};
+        return chunkRefs;
     });
-  
+
     // Get all messages for all chats in parallel
     const chatIds = chatsSnapshot.docs.map(doc => doc.id);
     const messageSnapshots = chatIds.length > 0
-      ? await Promise.all(
-          chatIds.map(chatId =>
-            db.collection('Message')
-              .where('chatID', '==', chatId)
-              .get()
-          )
+        ? await Promise.all(
+            chatIds.map(chatId =>
+                db.collection('Message')
+                    .where('chatID', '==', chatId)
+                    .get()
+            )
         )
-      : [];
-  
+        : [];
+
     // Collect all refs to delete
     const docsToDelete = [
-      ...materialRefs,
-      ...chunkRefs,
-      ...flashcardsSnapshot.docs.map(doc => doc.ref),
-      ...chatsSnapshot.docs.map(doc => doc.ref),
-      ...conceptMapSnapshot.docs.map(doc => doc.ref),
-      ...messageSnapshots.flatMap(snapshot => snapshot.docs.map(doc => doc.ref))
+        ...materialRefs,
+        ...chunkRefs,
+        ...flashcardsSnapshot.docs.map(doc => doc.ref),
+        ...chatsSnapshot.docs.map(doc => doc.ref),
+        ...conceptMapSnapshot.docs.map(doc => doc.ref),
+        ...messageSnapshots.flatMap(snapshot => snapshot.docs.map(doc => doc.ref))
     ];
-  
+
     // Batch delete in chunks of 500
     const BATCH_SIZE = 500;
     const batchPromises = [];
-    
+
     for (let i = 0; i < docsToDelete.length; i += BATCH_SIZE) {
-      const batch = db.batch();
-      const chunk = docsToDelete.slice(i, i + BATCH_SIZE);
-      chunk.forEach((docRef) => batch.delete(docRef));
-      batchPromises.push(batch.commit());
-      
-      // Commit batches in parallel groups of 10 to avoid overwhelming Firestore
-      if (batchPromises.length >= 10) {
-        await Promise.all(batchPromises);
-        batchPromises.length = 0;
-      }
+        const batch = db.batch();
+        const chunk = docsToDelete.slice(i, i + BATCH_SIZE);
+        chunk.forEach((docRef) => batch.delete(docRef));
+        batchPromises.push(batch.commit());
+
+        // Commit batches in parallel groups of 10 to avoid overwhelming Firestore
+        if (batchPromises.length >= 10) {
+            await Promise.all(batchPromises);
+            batchPromises.length = 0;
+        }
     }
-    
+
     // Commit any remaining batches
     if (batchPromises.length > 0) {
-      await Promise.all(batchPromises);
+        await Promise.all(batchPromises);
     }
 
     // Finally, delete the notebook itself
     await notebookRef.delete();
 };
 
-export const deleteChatQuery = async (chatId)=>{
+export const deleteChatQuery = async (chatId) => {
     const chatRef = db.collection('Chat').doc(chatId);
     // get the messages
-    let messagesSnaps  = await db.collection('Message').where('chatID', '==', chatRef).get();
-    let messagesRefs = messagesSnaps.docs.map(doc=>doc.ref)
+    let messagesSnaps = await db.collection('Message').where('chatID', '==', chatRef).get();
+    let messagesRefs = messagesSnaps.docs.map(doc => doc.ref)
     const docsToDelete = [...messagesRefs];
     const BATCH_SIZE = 500;
     const batchPromises = [];
-    
+
     for (let i = 0; i < docsToDelete.length; i += BATCH_SIZE) {
-      const batch = db.batch();
-      const chunk = docsToDelete.slice(i, i + BATCH_SIZE);
-      chunk.forEach((docRef) => batch.delete(docRef));
-      batchPromises.push(batch.commit());
-      
-      // Commit batches in parallel groups of 10 to avoid overwhelming Firestore
-      if (batchPromises.length >= 10) {
-        await Promise.all(batchPromises);
-        batchPromises.length = 0;
-      }
+        const batch = db.batch();
+        const chunk = docsToDelete.slice(i, i + BATCH_SIZE);
+        chunk.forEach((docRef) => batch.delete(docRef));
+        batchPromises.push(batch.commit());
+
+        // Commit batches in parallel groups of 10 to avoid overwhelming Firestore
+        if (batchPromises.length >= 10) {
+            await Promise.all(batchPromises);
+            batchPromises.length = 0;
+        }
     }
-    
+
     // Commit any remaining batches
     if (batchPromises.length > 0) {
-      await Promise.all(batchPromises);
+        await Promise.all(batchPromises);
     }
-  
+
     // Finally, delete the chat itself
     await chatRef.delete();
 }
@@ -354,7 +354,7 @@ Input: flashcards: Array of flashcard strings, notebookRef: DocumentReference
 */
 export const createFlashcardsQuery = async (flashcards, notebookRef) => {
     let now = admin.firestore.FieldValue.serverTimestamp();
-    
+
     // Create a single document containing all flashcards as an array
     const flashcardDoc = await db.collection('Flashcard').add({
         notebookID: notebookRef,
@@ -364,7 +364,7 @@ export const createFlashcardsQuery = async (flashcards, notebookRef) => {
         dateUpdated: now,
         status: 'active'
     });
-    
+
     return flashcardDoc; // Return single document reference
 }
 
@@ -386,36 +386,36 @@ export const updateNotebookWithDetailedSummary = async (notebookRef, detailedSum
     });
 }
 
-export const createMessageQuery = async (data)=>{
+export const createMessageQuery = async (data) => {
     let aiMessageRef = await db.collection('Message').add({
-        chatID:data.chatRef,
-        content:JSON.stringify(data.content),
-        references:data.references || [],
-        attachments:data.attachments || [],
-        role:data.role,
-        timestamp:admin.firestore.FieldValue.serverTimestamp()
+        chatID: data.chatRef,
+        content: JSON.stringify(data.content),
+        references: data.references || [],
+        attachments: data.attachments || [],
+        role: data.role,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
     })
     return aiMessageRef
 }
 
 // User collection related routes
-export const createUserQuery = async (data)=>{
+export const createUserQuery = async (data) => {
     let now = admin.firestore.FieldValue.serverTimestamp();
     let userRef = db.collection('User').doc(data.uid);
-    
+
     // Check if user already exists
     const userDoc = await userRef.get();
     if (!userDoc.exists) {
         // Create User document only if it doesn't exist
         await userRef.set({
             // Set the document ID manually using the provided uid (if available)
-            dateJoined:now,
-            email:data.email,
-            firstName:data.firstName,
-            lastName:data.lastName,
-            lastLogin:now,
-            subscription:'free',
-            isOnboardingComplete:false
+            dateJoined: now,
+            email: data.email,
+            firstName: data.firstName,
+            lastName: data.lastName,
+            lastLogin: now,
+            subscription: 'free',
+            isOnboardingComplete: false
         })
     } else {
         // Update lastLogin for existing user
@@ -424,16 +424,16 @@ export const createUserQuery = async (data)=>{
             email: data.email || userDoc.data().email,
             firstName: data.firstName || userDoc.data().firstName,
             lastName: data.lastName || userDoc.data().lastName,
-            isOnboardingComplete:true
+            isOnboardingComplete: true
         });
     }
-    
+
     // Check if UserProfile already exists for this user
     const existingProfiles = await db.collection('UserProfile')
         .where('userId', '==', userRef)
         .limit(1)
         .get();
-    
+
     if (existingProfiles.empty) {
         // Create UserProfile document only if none exists
         const onboardingData = data.onboardingData || {};
@@ -454,11 +454,11 @@ export const createUserQuery = async (data)=>{
             },
             userId: userRef // Reference to the User document
         })
-     } else {
+    } else {
         // Update existing UserProfile with new onboarding data if provided
         const existingProfile = existingProfiles.docs[0];
         const onboardingData = data.onboardingData || {};
-        
+
         if (Object.keys(onboardingData).length > 0) {
             await existingProfile.ref.update({
                 dateOfBirth: onboardingData.dateOfBirth || existingProfile.data().dateOfBirth,
@@ -472,7 +472,6 @@ export const createUserQuery = async (data)=>{
             });
         }
     }
-    
+
     return userRef
 }
-  

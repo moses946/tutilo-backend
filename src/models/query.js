@@ -44,7 +44,7 @@ export const createMaterialQuery = async (notebookRef, materials) => {
     let now = admin.firestore.FieldValue.serverTimestamp();
     const materialRefs = [];
 
-    if (materials.length == 1) {
+    if (materials.length === 1) {
         const materialRef = await db.collection('Material').add({
             notebookID: notebookRef,
             name: materials[0].originalname || materials[0].name,
@@ -83,7 +83,7 @@ export const createChunksQuery = async (chunks, materialRef) => {
     let now = admin.firestore.FieldValue.serverTimestamp();
     const chunkRefs = [];
 
-    if (chunks.length == 1) {
+    if (chunks.length === 1) {
         const chunkRef = await db.collection('Chunk').add({
             materialID: materialRef,
             pageNumber: chunks[0].pageNumber,
@@ -225,8 +225,10 @@ This function updates a notebook with a new material reference
 Input: notebookRef: DocumentReference, materialRef: DocumentReference
 */
 export const updateNotebookWithNewMaterialQuery = async (notebookRef, materialRef) => {
+    const notebookSnap = await notebookRef.get();
+    const existingRefs = notebookSnap.data().materialRefs || [];
     await notebookRef.update({
-        materialRefs: [...notebookRef.data().materialRefs, materialRef],
+        materialRefs: [...existingRefs, materialRef],
         status: 'completed',
         dateUpdated: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -276,7 +278,7 @@ export const deleteNotebookQuery = async (notebookId) => {
         ? await Promise.all(
             chatIds.map(chatId =>
                 db.collection('Message')
-                    .where('chatID', '==', chatId)
+                    .where('chatID', '==', db.collection('Chat').doc(chatId))
                     .get()
             )
         )

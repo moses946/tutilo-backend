@@ -3,11 +3,12 @@ import { handleConceptMapGeneration, handleFlashcardGeneration, handleQuizGenera
 import { createChunksQuery, createConceptMapQuery, createMaterialQuery, createNotebookQuery, deleteNotebookQuery, readNotebooksQuery, removeMaterialFromNotebook, updateChunksWithQdrantIds, updateMaterialWithChunks, updateNotebookWithFlashcards, updateNotebookWithMaterials, updateNotebookWithDetailedSummary } from "../models/query.js";
 import admin, { bucket, db } from "../services/firebase.js";
 import { convertImageToPdf, convertTextToPdf } from "../utils/pdfConverter.js";
-import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, handleChunkEmbeddingAndStorage, handleNotebookDetailedSummary } from "../utils/utility.js";
+import { handleBulkChunkRetrieval, handleBulkChunkUpload, handleBulkFileUpload, handleChunkEmbeddingAndStorage, handleNotebookDetailedSummary, cloneChunkReferencesForMaterial } from "../utils/utility.js";
 import { generateAudio } from "../utils/audioSummaries.js";
 import pLimit from 'p-limit';
-import extractContent from "../utils/chunking.js";
+import extractContent, { hashBuffer } from "../utils/chunking.js";
 import { handleComprehensiveQuizGeneration } from "../models/models.js";
+import { findSimilarDocument, registerDocumentFingerprint } from "../utils/fingerprinting.js";
 
 export async function handleGenerateNotebookQuiz(req, res) {
     const { id: notebookId } = req.params;
@@ -236,8 +237,42 @@ export async function handleNotebookProcessing(req, res) {
 
                     const storagePath = `notebooks/${notebookId}/materials/${materialData.storagePath}`;
                     const fileBuffer = await bucket.file(storagePath).download();
+                    const buffer = fileBuffer[0];
+
+                    // --- FINGERPRINT CHECK ---
+                    const contentHash = hashBuffer(buffer);
+                    const existingFingerprint = await findSimilarDocument(contentHash);
+
+                    if (existingFingerprint) {
+                        // BORROW chunks from existing document
+                        console.log(`[Fingerprint] Match found! Borrowing ${existingFingerprint.chunkIds.length} chunks from material ${existingFingerprint.materialId}`);
+
+                        const borrowedChunkRefs = await cloneChunkReferencesForMaterial(
+                            existingFingerprint.chunkIds,
+                            materialRef,
+                            notebookId
+                        );
+
+                        await updateMaterialWithChunks(materialRef, borrowedChunkRefs);
+                        await materialRef.update({
+                            borrowedFrom: existingFingerprint.materialId,
+                            borrowedFromNotebookId: existingFingerprint.notebookId, // Track source Qdrant collection
+                            contentHash: contentHash
+                        });
+
+                        // Return early - chunks are borrowed, search is now available
+                        return {
+                            success: true,
+                            borrowed: true,
+                            chunkRefs: borrowedChunkRefs,
+                            chunks: [], // No new chunks created
+                            name: materialData.name
+                        };
+                    }
+
+                    // --- NO MATCH: Process normally ---
                     const fileObj = {
-                        buffer: fileBuffer[0],
+                        buffer: buffer,
                         mimetype: 'application/pdf',
                         originalname: materialData.name
                     };
@@ -255,6 +290,11 @@ export async function handleNotebookProcessing(req, res) {
 
                     const qdrantPointIds = await handleChunkEmbeddingAndStorage(chunks, chunkRefs, notebookId, vectorDim);
                     await updateChunksWithQdrantIds(chunkRefs, qdrantPointIds);
+
+                    // Register fingerprint for future reuse
+                    const chunkIds = chunkRefs.map(ref => ref.id);
+                    await registerDocumentFingerprint(contentHash, notebookId, materialRef.id, uid, chunkIds);
+                    await materialRef.update({ contentHash: contentHash });
 
                     return { success: true, chunks, chunkRefs, name: materialData.name };
                 } catch (fileErr) {
@@ -278,7 +318,7 @@ export async function handleNotebookProcessing(req, res) {
         }
         if (chunkRefsCombined.length === 0 && materialRefs.length > 0) {
             await notebookRef.update({ status: 'failed', error: 'All uploaded materials failed to process.' });
-            return;
+            return res.status(500).json({ status: 'failed', error: 'All uploaded materials failed to process.' });
         }
 
         // --- 2. ROBUST AI ASSET GENERATION ---
@@ -1062,7 +1102,7 @@ export async function handleNotebookRead(req, res) {
 export async function handleAudioGeneration(req, res) {
 
     try {
-        if (!req.body || !req.body.text && !req.body.notebookId) {
+        if (!req.body || !req.body.text || !req.body.notebookId) {
             return res.status(400).json({
                 error: 'Text and the Notebook Id is required',
                 message: 'Please provide text and Notebook Id in the request body'
@@ -1127,7 +1167,7 @@ export const handleLastViewedUpdate = async (req, res) => {
             dateUpdated: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true })
 
-        res.status(200);
+        res.status(200).json({ message: 'Last viewed updated' });
     } catch (err) {
         res.status(500).json({
             error: `Failed to update server`,

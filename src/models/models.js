@@ -209,7 +209,7 @@ export const handleChatSummarization = async (existingSummary, messagesToSummari
 }
 
 
-const executeNotebookSearch = async (notebookId, query, vectorDim) => {
+const executeNotebookSearch = async (notebookId, query, vectorDim, borrowedCollectionIds = []) => {
   try {
     let embedding = await ai.models.embedContent({
       model: 'gemini-embedding-001',
@@ -219,25 +219,47 @@ const executeNotebookSearch = async (notebookId, query, vectorDim) => {
     });
     let queryVector = embedding.embeddings[0].values;
 
-    let qdrantResults = await qdrantClient.search(notebookId, {
-      vector: queryVector,
-      limit: 5,
-      with_payload: true,
+    // Search the notebook's own collection + any borrowed collections
+    const collectionsToSearch = [notebookId, ...borrowedCollectionIds];
+    const allResults = [];
+
+    for (const collectionId of collectionsToSearch) {
+      try {
+        const qdrantResults = await qdrantClient.search(collectionId, {
+          vector: queryVector,
+          limit: 5,
+          with_payload: true,
+        });
+        if (qdrantResults && qdrantResults.length > 0) {
+          // Tag results with their source collection
+          allResults.push(...qdrantResults.map(r => ({ ...r, sourceCollection: collectionId })));
+        }
+      } catch (collectionErr) {
+        // Collection might not exist yet (e.g., new notebook with only borrowed content)
+        console.warn(`[Search] Collection ${collectionId} not found or empty`);
+      }
+    }
+
+    if (allResults.length === 0) return [];
+
+    // Sort by score and take top 5 across all collections
+    allResults.sort((a, b) => b.score - a.score);
+    const topResults = allResults.slice(0, 5);
+
+    // For each result, get chunk from the appropriate notebook's storage
+    const chunkDocRefs = topResults.map(r => db.collection('Chunk').doc(r.payload.chunkID));
+    const chunkDocs = await db.getAll(...chunkDocRefs);
+
+    // Build chunk paths - use source collection for borrowed chunks
+    const chunkPaths = topResults.map((result, index) => {
+      const sourceNotebookId = result.sourceCollection;
+      return `notebooks/${sourceNotebookId}/chunks/${result.payload.chunkID}.json`;
     });
 
-    if (!qdrantResults || qdrantResults.length === 0) return [];
-
-    let chunkBasePath = `notebooks/${notebookId}/chunks/`;
-    let chunkPaths = qdrantResults.map((result) => (`${chunkBasePath}${result.payload.chunkID}.json`));
-    const chunkDocRefs = qdrantResults.map(r => db.collection('Chunk').doc(r.payload.chunkID));
-
-    let [chunksContent, chunkDocs] = await Promise.all([
-      handleBulkChunkRetrieval(chunkPaths),
-      db.getAll(...chunkDocRefs)
-    ]);
+    const chunksContent = await handleBulkChunkRetrieval(chunkPaths);
 
     return chunksContent.map((content, index) => {
-      const chunkId = qdrantResults[index]?.payload?.chunkID;
+      const chunkId = topResults[index]?.payload?.chunkID;
       const docData = chunkDocs[index].exists ? chunkDocs[index].data() : {};
       const text = typeof content === 'string' ? content : JSON.stringify(content);
 
@@ -258,7 +280,7 @@ const executeNotebookSearch = async (notebookId, query, vectorDim) => {
 };
 
 
-export const handleRunAgent = async (req, data, chatObj, chatRef, existingSummary) => {
+export const handleRunAgent = async (req, data, chatObj, chatRef, existingSummary, onChunk) => {
   try {
     const userId = req.user.uid; // Extract ID
     let plan = req.user.subscription;
@@ -314,7 +336,8 @@ export const handleRunAgent = async (req, data, chatObj, chatRef, existingSummar
       chatRef,
       userMessageContent,
       existingSummary,
-      data.notebookID // Pass notebookID for the tool
+      data.notebookID, // Pass notebookID for the tool
+      onChunk // Pass the streaming callback
     );
 
     return agentResponse;
@@ -400,9 +423,11 @@ RULES:
  * userObj:{
  *  plan:string
  * }
+ * 
+ * @param {function} onChunk - Optional callback for streaming: (textChunk) => void
  */
 
-export async function agentLoop(userId, chatObj, chatRef, messageContent = [], summary = '', notebookId) {
+export async function agentLoop(userId, chatObj, chatRef, messageContent = [], summary = '', notebookId, onChunk) {
   var userObj = userMap.get(userId);
   var plan = userObj.plan;
   var modelLimits = getModelConfig(plan);
@@ -455,10 +480,10 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
       }
     } : undefined;
 
-    const response = await ai.models.generateContent({
+    // Use generateContentStream for streaming
+    const streamingResult = await ai.models.generateContentStream({
       model: modelLimits.agentModel,
       contents: currentContents,
-
       config: {
         temperature: 0.7,
         tools: tools,
@@ -467,18 +492,118 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
           thinkingBudget: modelLimits.thinkingBudget
         },
         systemInstruction: systemPromptText,
-      } // Allow some creativity
+      }
     });
 
-    // Log token usage
-    await logTokenUsage(userId, modelLimits.agentModel, response.usageMetadata, 'agent_chat_loop');
-    const responseContent = response.candidates[0].content;
+    console.log('[DEBUG] streamingResult type:', typeof streamingResult);
+    console.log('[DEBUG] streamingResult keys:', Object.keys(streamingResult || {}));
+    if (streamingResult && streamingResult.stream) {
+      console.log('[DEBUG] streamingResult.stream type:', typeof streamingResult.stream);
+    } else {
+      console.log('[DEBUG] streamingResult.stream is UNDEFINED');
+    }
+
+    let aggregatedResponse = {
+      candidates: [{
+        content: {
+          parts: [],
+          role: 'model' // Default
+        }
+      }],
+      usageMetadata: {}
+    };
+
+    let textBuffer = ""; // To accumulate text chunks for this turn
+
+    // Determine the iterator
+    let streamIterator;
+    if (streamingResult.stream) {
+      streamIterator = streamingResult.stream;
+    } else if (streamingResult && typeof streamingResult[Symbol.asyncIterator] === 'function') {
+      // console.log('[DEBUG] streamingResult is directly iterable');
+      streamIterator = streamingResult;
+    } else {
+      // console.warn('[WARNING] No stream iterator found. Falling back.');
+    }
+
+    let finalResponseMetadata = {};
+    let aggregatedFunctionCalls = [];
+
+    // Process the stream if available
+    if (streamIterator) {
+      try {
+        for await (const chunk of streamIterator) {
+          let chunkText = '';
+          if (chunk.candidates && chunk.candidates[0] && chunk.candidates[0].content && chunk.candidates[0].content.parts) {
+            const parts = chunk.candidates[0].content.parts;
+            if (parts.length > 0) {
+              if (parts[0].text) {
+                chunkText = parts[0].text;
+              }
+              // Check for function calls in this chunk and preserve them
+              for (const part of parts) {
+                if (part.functionCall) {
+                  aggregatedFunctionCalls.push(part);
+                }
+              }
+            }
+          }
+
+          if (chunkText) {
+            textBuffer += chunkText;
+            if (onChunk) {
+              onChunk(chunkText); // Stream to client immediately
+            }
+          }
+          // Capture metadata from the last chunk if present
+          if (chunk.usageMetadata) {
+            finalResponseMetadata.usageMetadata = chunk.usageMetadata;
+          }
+        }
+      } catch (err) {
+        console.error('[ERROR] Error iterating stream:', err);
+      }
+    }
+
+    // After iteration, we construct the 'response' object expected by the rest of the code
+    const response = {
+      candidates: [{
+        content: {
+          role: 'model',
+          parts: []
+        }
+      }],
+      usageMetadata: finalResponseMetadata.usageMetadata || {}
+    };
+
+    // Reconstruct parts from buffer and collected function calls
+    if (textBuffer) {
+      response.candidates[0].content.parts.push({ text: textBuffer });
+    }
+    if (aggregatedFunctionCalls.length > 0) {
+      response.candidates[0].content.parts.push(...aggregatedFunctionCalls);
+    }
+
+
+
+    // [INSERT] Log token usage
+    if (response.usageMetadata) {
+      await logTokenUsage(userId, modelLimits.agentModel, response.usageMetadata, 'agent_chat_loop');
+    }
+
+    const responseContent = response.candidates?.[0]?.content;
+    if (!responseContent) {
+      // Should not happen if successful
+      console.error('No content in response candidates');
+      break;
+    }
     const responseParts = responseContent.parts || [];
 
     // Add model's thought/call to history for next iteration
     currentContents.push(responseContent);
 
     // Check for Function Calls
+    // (Existing logic continues...)
     const functionCalls = responseParts.filter(part => part.functionCall);
 
 
@@ -494,7 +619,28 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
         if (fn.name === 'search_notebook') {
           sendStatusToUser(userId, 'Searching your notes...');
           const query = fn.args.query;
-          const results = await executeNotebookSearch(notebookId, query, modelLimits.vectorDim);
+
+          // Fetch borrowed collection IDs from notebook materials
+          let borrowedCollectionIds = [];
+          try {
+            const notebookRef = db.collection('Notebook').doc(notebookId);
+            const notebookSnap = await notebookRef.get();
+            if (notebookSnap.exists) {
+              const materialRefs = notebookSnap.data().materialRefs || [];
+              if (materialRefs.length > 0) {
+                const materialSnaps = await db.getAll(...materialRefs);
+                borrowedCollectionIds = materialSnaps
+                  .filter(snap => snap.exists && snap.data().borrowedFromNotebookId)
+                  .map(snap => snap.data().borrowedFromNotebookId);
+                // Deduplicate
+                borrowedCollectionIds = [...new Set(borrowedCollectionIds)];
+              }
+            }
+          } catch (err) {
+            console.warn('[Search] Failed to fetch borrowed collections:', err.message);
+          }
+
+          const results = await executeNotebookSearch(notebookId, query, modelLimits.vectorDim, borrowedCollectionIds);
           sendStatusToUser(userId, 'Analyzing results...');
 
           // Store results in chatObj for persistence
@@ -516,7 +662,7 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
         }
         else if (fn.name === 'video_gen') {
           try {
-            if (plan == 'free') {
+            if (plan === 'free') {
               functionResponses.push({
                 functionResponse: { name: 'video_gen', response: { result: "Failed: Free tier." } }
               });
@@ -538,6 +684,12 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
           const reason = fn.args.reason || 'This question is outside the scope of your notebook.';
           const suggestion = fn.args.suggestedTopic ? ` Try asking about: "${fn.args.suggestedTopic}"` : '';
           finalResponseText = `I'm here to help you with your study material! ${reason}${suggestion}`;
+
+          // Stream this response as well if needed, though strictly it might not have been streamed in the loop above if it came as a tool call args (unlikely for text response).
+          // If the model called decline_query, it didn't output text yet. We are fabricating the text here.
+          // We should stream it to the user.
+          if (onChunk) onChunk(finalResponseText);
+
           aiMessageRef = await createMessageQuery({ content: [{ text: finalResponseText }], role: 'model', chatRef });
           // Exit the loop immediately - no need for function response
           return {
@@ -563,8 +715,20 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
 
     } else {
       // No function calls -> Final Answer
+      // Check if we already streamed the text (Yes, via textBuffer in the loop)
+      // Accumulate final text for DB storage
       sendStatusToUser(userId, 'Generating response...');
-      finalResponseText = responseParts.map(p => p.text).join('');
+
+      // Note: responseParts might contain thought trace (if enabled) + text.
+      // We only want the text for finalResponseText usually?
+      // With generateContentStream, text() returns the text.
+      // Let's assume textBuffer is the "visible" content we care about for the user message.
+      // BUT responseParts is what we save to DB and history.
+
+      // If textBuffer is empty but responseContent exists (maybe only thought?), handle that?
+      // Usually, if no tools, it's the answer.
+      finalResponseText = textBuffer; // Use the accumulated streamed text
+
       aiMessageRef = await createMessageQuery({ content: [{ text: finalResponseText }], role: 'model', chatRef });
       sendStatusToUser(userId, null); // Clear status
       break; // Exit loop

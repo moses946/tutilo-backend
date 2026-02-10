@@ -132,7 +132,7 @@ app.get('/api/v1/notebooks/:id/materials/:materialId/download', handleMaterialDo
 app.use('/api/v1/notebooks', authMiddleWare, notebookRouter);
 app.use('/api/v1/chats', authMiddleWare, chatRouter);
 app.use('/api/v1/auth', authRouter);
-app.use('/api/v1/billing', authMiddleWare, billingRouter);
+app.use('/api/v1/billing', billingRouter);
 app.use('/api/v1/users', authMiddleWare, userRouter);
 app.use('/api/v1/quizzes', authMiddleWare, quizRouter);
 app.use('/api/v1/flashcards', authMiddleWare, flashcardsRouter);

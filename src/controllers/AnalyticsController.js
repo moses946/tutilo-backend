@@ -154,8 +154,6 @@ export async function handleGetTokenUsageSummary(req, res) {
         res.json({
             totalRecords: snapshot.docs.length,
             byUser: userList,
-            totalRecords: snapshot.docs.length,
-            byUser: userList,
             byFeature: featureList,
             dailyUsage: Object.values(dailyAggregates).sort((a, b) => new Date(a.date) - new Date(b.date))
         });
@@ -195,6 +193,7 @@ export async function handleGetAllUsersStats(req, res) {
                 subscription: userData.subscription || 'free',
                 isAdmin: userData.isAdmin || false,
                 tokenRequestCount: tokenSnapshot.data().count,
+                subscriptionStatus: userData.subscriptionStatus || 'none',
                 lastLogin: userData.lastLogin?.toDate?.()?.toISOString?.() || null,
                 createdAt: userData.createdAt?.toDate?.()?.toISOString?.() || null
             });
@@ -207,5 +206,182 @@ export async function handleGetAllUsersStats(req, res) {
     } catch (err) {
         console.error('[Admin] Get users stats error:', err);
         res.status(500).json({ error: 'Failed to fetch users' });
+    }
+}
+
+// ============================================
+// TRANSACTION HISTORY
+// ============================================
+
+export async function handleGetTransactionHistory(req, res) {
+    try {
+        const { startDate, endDate } = req.query;
+
+        let query = db.collection('Transaction').orderBy('timestamp', 'desc');
+
+        if (startDate) {
+            query = query.where('timestamp', '>=', new Date(startDate));
+        }
+        if (endDate) {
+            query = query.where('timestamp', '<=', new Date(endDate));
+        }
+
+        const snapshot = await query.limit(500).get();
+
+        const transactions = [];
+        const userIdSet = new Set();
+
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            let uid = data.userId;
+            if (uid && typeof uid === 'object' && uid.id) uid = uid.id;
+            else if (uid && typeof uid === 'object' && uid._path) uid = uid._path.segments?.[uid._path.segments.length - 1] || 'unknown';
+            uid = String(uid || 'unknown');
+
+            userIdSet.add(uid);
+
+            transactions.push({
+                id: doc.id,
+                userId: uid,
+                tier: data.tier || data.plan || 'unknown',
+                amount: data.amount || 0,
+                currency: data.currency || 'N/A',
+                status: data.status || 'unknown',
+                channel: data.channel || 'N/A',
+                reference: data.transactionReference || data.reference || '',
+                isRecurring: data.isRecurring || false,
+                source: data.source || 'direct',
+                timestamp: data.timestamp?.toDate?.()?.toISOString?.() || null
+            });
+        });
+
+        // Batch lookup emails
+        const userIds = [...userIdSet].filter(id => id !== 'unknown');
+        const emailMap = {};
+        if (userIds.length > 0) {
+            const userDocs = await Promise.all(
+                userIds.slice(0, 100).map(id => db.collection('User').doc(id).get())
+            );
+            userDocs.forEach(doc => {
+                if (doc.exists) emailMap[doc.id] = doc.data().email || 'N/A';
+            });
+        }
+
+        transactions.forEach(t => {
+            t.email = emailMap[t.userId] || 'N/A';
+        });
+
+        res.json({ transactions, total: transactions.length });
+    } catch (err) {
+        console.error('[Admin] Transaction history error:', err);
+        res.status(500).json({ error: 'Failed to fetch transactions' });
+    }
+}
+
+// ============================================
+// PLATFORM STATS
+// ============================================
+
+export async function handleGetPlatformStats(req, res) {
+    try {
+        // Count documents in each major collection
+        const [notebooks, chats, messages, quizzes, flashcards, materials, conceptMaps, users] = await Promise.all([
+            db.collection('Notebook').where('isDeleted', '==', false).count().get(),
+            db.collection('Chat').count().get(),
+            db.collection('Message').count().get(),
+            db.collection('Quizzes').count().get(),
+            db.collection('Flashcard').count().get(),
+            db.collection('Material').count().get(),
+            db.collection('ConceptMap').count().get(),
+            db.collection('User').where('isDeleted', '!=', true).get()
+        ]);
+
+        // Subscription distribution from full user docs
+        const planCounts = { free: 0, plus: 0, pro: 0 };
+        const statusCounts = { active: 0, cancelled: 0, non_renewing: 0, attention: 0, none: 0 };
+        let totalUsers = 0;
+
+        users.docs.forEach(doc => {
+            totalUsers++;
+            const data = doc.data();
+            const plan = data.subscription || 'free';
+            const status = data.subscriptionStatus || 'none';
+            planCounts[plan] = (planCounts[plan] || 0) + 1;
+            statusCounts[status] = (statusCounts[status] || 0) + 1;
+        });
+
+        res.json({
+            content: {
+                notebooks: notebooks.data().count,
+                chats: chats.data().count,
+                messages: messages.data().count,
+                quizzes: quizzes.data().count,
+                flashcards: flashcards.data().count,
+                materials: materials.data().count,
+                conceptMaps: conceptMaps.data().count
+            },
+            subscriptions: {
+                plans: planCounts,
+                statuses: statusCounts,
+                totalUsers
+            }
+        });
+    } catch (err) {
+        console.error('[Admin] Platform stats error:', err);
+        res.status(500).json({ error: 'Failed to fetch platform stats' });
+    }
+}
+
+// ============================================
+// REVENUE METRICS
+// ============================================
+
+export async function handleGetRevenueMetrics(req, res) {
+    try {
+        const snapshot = await db.collection('Transaction')
+            .where('status', '==', 'success')
+            .orderBy('timestamp', 'desc')
+            .limit(1000)
+            .get();
+
+        let totalRevenue = 0;
+        const byPlan = {};
+        const byCurrency = {};
+        const monthly = {};
+
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const amount = data.amount || 0;
+            const plan = data.tier || 'unknown';
+            const currency = data.currency || 'N/A';
+            const dateObj = data.timestamp?.toDate?.();
+            const month = dateObj ? `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}` : 'Unknown';
+
+            totalRevenue += amount;
+
+            if (!byPlan[plan]) byPlan[plan] = { plan, amount: 0, count: 0 };
+            byPlan[plan].amount += amount;
+            byPlan[plan].count += 1;
+
+            if (!byCurrency[currency]) byCurrency[currency] = { currency, amount: 0, count: 0 };
+            byCurrency[currency].amount += amount;
+            byCurrency[currency].count += 1;
+
+            if (!monthly[month]) monthly[month] = { month, amount: 0, count: 0 };
+            monthly[month].amount += amount;
+            monthly[month].count += 1;
+        });
+
+        res.json({
+            totalRevenue,
+            totalTransactions: snapshot.docs.length,
+            averageTransaction: snapshot.docs.length > 0 ? Math.round(totalRevenue / snapshot.docs.length) : 0,
+            byPlan: Object.values(byPlan).sort((a, b) => b.amount - a.amount),
+            byCurrency: Object.values(byCurrency).sort((a, b) => b.amount - a.amount),
+            monthly: Object.values(monthly).sort((a, b) => a.month.localeCompare(b.month))
+        });
+    } catch (err) {
+        console.error('[Admin] Revenue metrics error:', err);
+        res.status(500).json({ error: 'Failed to fetch revenue metrics' });
     }
 }

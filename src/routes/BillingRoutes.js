@@ -14,7 +14,7 @@ import { authMiddleWare } from '../middleware/authMiddleWare.js';
 const billingRouter = express.Router();
 
 // Transaction endpoints (existing)
-billingRouter.post('/transaction/initialize', handleInitTransaction);
+billingRouter.post('/transaction/initialize', authMiddleWare, handleInitTransaction);
 billingRouter.post('/verify/:userID', authMiddleWare, handleTransactionVerification);
 
 // Subscription management endpoints

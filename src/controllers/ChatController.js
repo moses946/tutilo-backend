@@ -230,14 +230,23 @@ export async function handleCreateMessage(req, res) {
             console.log(`[Summarization] Chat ${chatID}: Complete. New token count: ${newTokens}. Summary length: ${newSummary?.length || 0} chars.`);
         }
 
-        // 5. Run Agent
+        // 5. Run Agent (Streaming)
         // Pass a copy of history to avoid mutation issues during async operations
         let agentContextObj = {
             ...chatObj,
             history: [...chatObj.history]
         };
 
-        result = await handleRunAgent(req, data, agentContextObj, chatRef, existingSummary);
+        // Prepare response for streaming
+        res.setHeader('Content-Type', 'text/plain');
+        res.setHeader('Transfer-Encoding', 'chunked');
+
+        const onChunk = (textChunk) => {
+            // Write chunk as a JSON line
+            res.write(JSON.stringify({ type: 'text', content: textChunk }) + '\n');
+        };
+
+        result = await handleRunAgent(req, data, agentContextObj, chatRef, existingSummary, onChunk);
 
         // 6. Update History with AI Response
         if (result.message) {
@@ -245,12 +254,28 @@ export async function handleCreateMessage(req, res) {
             // Update LRU freshness
             chatMap.set(chatID, chatObj);
         }
+
+        // Send final metadata
+        res.write(JSON.stringify({
+            type: 'final',
+            message: result.message,
+            media: result.media,
+            chunkMetadata: result.chunkMetadata
+        }) + '\n');
+
+        res.end();
+
     } catch (err) {
         console.log(`ERROR--creating message:${err}`);
-        res.status(500).json('Error while creating message');
+        // If headers not sent, send JSON error. If sent, stream error chunk.
+        if (!res.headersSent) {
+            res.status(500).json('Error while creating message');
+        } else {
+            res.write(JSON.stringify({ type: 'error', error: 'Error while creating message' }) + '\n');
+            res.end();
+        }
     }
-
-    res.json(result)
+    // Note: res.json(result) is removed because we streamed the response
 }
 
 // handle reading messages

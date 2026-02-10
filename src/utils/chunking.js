@@ -64,8 +64,8 @@ class LRUCache {
 
 const cache = new LRUCache(CACHE_SIZE);
 
-// Hash buffer for cache key generation
-function hashBuffer(buffer) {
+// Hash buffer for cache key generation (exported for fingerprinting)
+export function hashBuffer(buffer) {
   return crypto.createHash('sha1').update(buffer).digest('hex');
 }
 

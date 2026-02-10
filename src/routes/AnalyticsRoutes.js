@@ -1,5 +1,13 @@
 import express from 'express';
-import { handleFeedbackSubmission, handleSessionLog, handleGetTokenUsageSummary, handleGetAllUsersStats } from '../controllers/AnalyticsController.js';
+import {
+    handleFeedbackSubmission,
+    handleSessionLog,
+    handleGetTokenUsageSummary,
+    handleGetAllUsersStats,
+    handleGetTransactionHistory,
+    handleGetPlatformStats,
+    handleGetRevenueMetrics
+} from '../controllers/AnalyticsController.js';
 import { authMiddleWare } from '../middleware/authMiddleWare.js';
 import { adminMiddleware } from '../middleware/adminMiddleware.js';
 
@@ -20,5 +28,14 @@ analyticsRouter.get('/admin/tokens', authMiddleWare, adminMiddleware, handleGetT
 
 // Get all users with stats
 analyticsRouter.get('/admin/users', authMiddleWare, adminMiddleware, handleGetAllUsersStats);
+
+// Transaction history
+analyticsRouter.get('/admin/transactions', authMiddleWare, adminMiddleware, handleGetTransactionHistory);
+
+// Platform-wide content and subscription stats
+analyticsRouter.get('/admin/platform-stats', authMiddleWare, adminMiddleware, handleGetPlatformStats);
+
+// Revenue metrics
+analyticsRouter.get('/admin/revenue', authMiddleWare, adminMiddleware, handleGetRevenueMetrics);
 
 export default analyticsRouter;

@@ -104,12 +104,11 @@ export async function handleInitTransaction(req, res) {
             }
         };
 
-        // If a Plan Code exists, use it for Recurring Billing
         if (paystackPlanCode) {
             payload.plan = paystackPlanCode;
             console.log(`[Billing] Subscription mode: using plan ${paystackPlanCode}`);
         } else {
-            console.log(`[Billing] One-time payment mode: no plan code in .env for ${envPlanKey}`);
+            console.warn(`[Billing] One-time payment mode: no plan code in .env for ${envPlanKey}. User will be charged once but subscription will NOT renew automatically.`);
         }
 
         // 5. Send Request to Paystack
@@ -171,6 +170,13 @@ export async function handleTransactionVerification(req, res) {
                 message: 'Transaction verification failed.',
                 details: data?.gateway_response
             });
+        }
+
+        // Check for duplicate transaction
+        const existingTx = await db.collection('Transaction').where('transactionReference', '==', reference).limit(1).get();
+        if (!existingTx.empty) {
+            console.log(`[Billing] Transaction ${reference} already verified. Skipping duplicate record.`);
+            return res.status(200).json({ message: 'Transaction already verified', subscription: plan });
         }
 
         const now = admin.firestore.FieldValue.serverTimestamp();
@@ -301,6 +307,16 @@ async function handleChargeSuccess(data) {
         return;
     }
 
+    // Check for duplicate transaction (avoid double counting if verify endpoint was already called)
+    const existingTx = await db.collection('Transaction').where('transactionReference', '==', data.reference).limit(1).get();
+    if (!existingTx.empty) {
+        console.log(`[Webhook] Transaction ${data.reference} already recorded. Skipping.`);
+        // Ensure user status is active though, just in case
+        const userId = userSnapshot.docs[0].id;
+        await db.collection('User').doc(userId).update({ subscriptionStatus: 'active', subscriptionUpdated: admin.firestore.FieldValue.serverTimestamp() });
+        return;
+    }
+
     const userDoc = userSnapshot.docs[0];
     const userId = userDoc.id;
     const now = admin.firestore.FieldValue.serverTimestamp();
@@ -392,11 +408,12 @@ async function handleSubscriptionDisable(data) {
     const userDoc = userSnapshot.docs[0];
 
     await db.collection('User').doc(userDoc.id).update({
+        subscription: 'free',
         subscriptionStatus: 'cancelled',
         subscriptionCancelledAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    console.log(`[Webhook] Subscription disabled for user: ${userDoc.id}`);
+    console.log(`[Webhook] Subscription disabled for user: ${userDoc.id} - Protocol: Downgraded to FREE`);
 }
 
 // Helper: Handle failed invoice (failed recurring charge)
@@ -674,12 +691,22 @@ export async function updatePaymentCard(req, res) {
 
         const userData = userDoc.data();
 
-        // Initialize a transaction for card update (small amount that gets refunded or zero-auth)
-        // We use a minimal amount transaction to capture new card details
+        if (!userData.email) {
+            return res.status(400).json({ message: 'User email not found' });
+        }
+
+        // Use currency from frontend or default to KES
+        const currency = req.body.currency || 'KES';
+        // Amount is in smallest currency unit (kobo/cents)
+        // USD: 20 cents ($0.20) minimum
+        // KES/NGN/ZAR: 100 cents/kobo (1.00 unit)
+        let amount = 100;
+        if (currency === 'USD') amount = 20; // $0.20
+
         const payload = {
             email: userData.email,
-            amount: 5000, // 50 NGN - will be used to validate card, can be refunded
-            currency: 'NGN',
+            amount: amount,
+            currency: currency,
             channels: ['card'],
             metadata: {
                 purpose: 'card_update',
@@ -689,6 +716,8 @@ export async function updatePaymentCard(req, res) {
                 ]
             }
         };
+
+        console.log(`[Update Card] Initializing for user ${userID}, email: ${userData.email}, currency: ${currency}, amount: ${amount}`);
 
         const response = await fetch(`${payStackURL}/transaction/initialize`, {
             method: 'POST',
@@ -702,8 +731,11 @@ export async function updatePaymentCard(req, res) {
         const result = await response.json();
 
         if (!response.ok) {
+            console.error(`[Update Card] Paystack error (${response.status}):`, JSON.stringify(result));
             return res.status(400).json({ message: result.message || 'Failed to initialize card update' });
         }
+
+        console.log(`[Update Card] Success - access_code: ${result.data?.access_code}, reference: ${result.data?.reference}`);
 
         res.status(200).json({
             message: 'Card update initialized',
@@ -767,8 +799,23 @@ export async function verifyCardUpdate(req, res) {
             cardUpdatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // TODO: Optionally refund the 50 NGN validation charge
-        // Can implement refund endpoint call here
+        // Refund the validation charge
+        try {
+            console.log(`[Verify Card] Attempting refund for reference: ${data.reference}`);
+            // Paystack Refund API
+            const refundResponse = await fetch(`${payStackURL}/refund`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ transaction: data.reference })
+            });
+            const refundResult = await refundResponse.json();
+            console.log(`[Verify Card] Refund status:`, refundResult.status, refundResult.message);
+        } catch (refundErr) {
+            console.error(`[Verify Card] Refund failed (non-critical):`, refundErr);
+        }
 
         res.status(200).json({
             message: 'Card updated successfully!',

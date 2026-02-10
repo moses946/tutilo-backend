@@ -10,7 +10,6 @@ export const upload = multer({ storage });
 
 export const handleFileUpload = async (file, path) => {
     try {
-        const destinationPath = `${path}`;
         const blob = bucket.file(path);
         await blob.save(file.buffer, {
             metadata: {
@@ -149,11 +148,10 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
         // Extract text content from chunks
         // Batch functionality: process up to 100 chunks per embedding request
         const texts = chunks.map(chunk => chunk.text);
-        let embeddingBatchSize = 100;
+        const embeddingBatchSize = 100;
         let allEmbeddings = [];
         for (let i = 0; i < texts.length; i += embeddingBatchSize) {
             const batchTexts = texts.slice(i, i + embeddingBatchSize);
-            embeddingBatchSize = Math.min(embeddingBatchSize, texts.length - i);
             const response = await ai.models.embedContent({
                 // model: 'gemini-embedding-exp-03-07',
                 model: 'gemini-embedding-001',
@@ -203,7 +201,7 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
         }
 
         // Upload points to Qdrant in batches
-        let batchSize = 100;
+        const batchSize = 100;
         const uploadedPoints = [];
 
         for (let i = 0; i < points.length; i += batchSize) {
@@ -211,8 +209,6 @@ export const handleChunkEmbeddingAndStorage = async (chunks, chunkRefs, collecti
             const result = await qdrantClient.upsert(collectionName, {
                 points: batch
             });
-            // Making the batch size dynamic
-            batchSize = Math.min(batchSize, points.length - i);
             uploadedPoints.push(...batch.map(point => point.id));
         }
         return uploadedPoints;
@@ -229,11 +225,66 @@ export const handleNotebookUpdate = async (notebookID, materialRefs) => {
     await updateNotebookWithNewMaterialQuery(notebookRef, materialRefs);
 }
 
+/**
+ * Clone chunk references from a source material to a target material.
+ * Used for shared index reuse - allows instant search via borrowed chunks.
+ * 
+ * @param {string[]} sourceChunkIds - Array of chunk IDs to borrow
+ * @param {DocumentReference} targetMaterialRef - Target material reference
+ * @param {string} targetNotebookId - Target notebook ID (for Qdrant collection)
+ * @returns {Promise<DocumentReference[]>} Array of chunk references for the target material
+ */
+export const cloneChunkReferencesForMaterial = async (sourceChunkIds, targetMaterialRef, targetNotebookId) => {
+    try {
+        if (!sourceChunkIds || sourceChunkIds.length === 0) {
+            return [];
+        }
+
+        // Fetch source chunk documents
+        const sourceChunkRefs = sourceChunkIds.map(id => db.collection('Chunk').doc(id));
+        const sourceChunkSnaps = await db.getAll(...sourceChunkRefs);
+
+        // Create new chunk documents that reference the same content
+        const batch = db.batch();
+        const newChunkRefs = [];
+
+        for (let i = 0; i < sourceChunkSnaps.length; i++) {
+            const sourceSnap = sourceChunkSnaps[i];
+            if (!sourceSnap.exists) continue;
+
+            const sourceData = sourceSnap.data();
+            const newChunkRef = db.collection('Chunk').doc();
+
+            // Clone chunk with new material reference but preserve content metadata
+            batch.set(newChunkRef, {
+                pageNumber: sourceData.pageNumber,
+                tokenCount: sourceData.tokenCount,
+                materialID: targetMaterialRef,
+                qdrantPointId: sourceData.qdrantPointId, // Reuse same Qdrant point
+                borrowedFrom: sourceChunkRefs[i], // Track origin for debugging
+                createdAt: new Date()
+            });
+
+            newChunkRefs.push(newChunkRef);
+        }
+
+        await batch.commit();
+        console.log(`[ChunkClone] Cloned ${newChunkRefs.length} chunks for material ${targetMaterialRef.id}`);
+
+        return newChunkRefs;
+
+    } catch (err) {
+        console.error('[ChunkClone] Error cloning chunk references:', err);
+        throw err;
+    }
+}
+
 export const handleNotebookDeletion = async (notebookId) => {
     try {
 
         // get the chats and bulk delete
-        let chatSnaps = await db.collection('Chat').where('notebookID', '==', notebookId).get();
+        const notebookRef = db.collection('Notebook').doc(notebookId);
+        let chatSnaps = await db.collection('Chat').where('notebookID', '==', notebookRef).get();
         let chatIds = chatSnaps.docs.map((doc) => doc.id);
         await handleBulkDeleteChat(notebookId, chatIds);
         await bucket.deleteFiles({ prefix: `notebooks/${notebookId}/` });

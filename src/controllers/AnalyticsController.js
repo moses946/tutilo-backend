@@ -168,16 +168,34 @@ export async function handleGetTokenUsageSummary(req, res) {
  */
 export async function handleGetAllUsersStats(req, res) {
     try {
-        // Get all users
+        const { startDate, endDate } = req.query;
+
+        // Fetch last 500 users (most recent first)
+        // If dateJoined index exists we could sort, but for now just get 500
+        // To be safe against index errors, we just get limit 500
         const usersSnapshot = await db.collection('User')
-            .where('isDeleted', '!=', true)
             .limit(500)
             .get();
+
+        const start = startDate ? new Date(startDate) : null;
+        const end = endDate ? new Date(endDate) : null;
 
         const users = [];
 
         for (const userDoc of usersSnapshot.docs) {
             const userData = userDoc.data();
+
+            // In-memory date filter
+            if (userData.dateJoined) {
+                const joined = userData.dateJoined.toDate();
+                if (start && joined < start) continue;
+                if (end && joined > end) continue;
+            } else if (start || end) {
+                // If filtering by date and user has no date, exclude them
+                continue;
+            }
+
+            if (userData.isDeleted === true) continue;
 
             // Get token usage count for this user
             const tokenSnapshot = await db.collection('TokenUsage')
@@ -194,8 +212,9 @@ export async function handleGetAllUsersStats(req, res) {
                 isAdmin: userData.isAdmin || false,
                 tokenRequestCount: tokenSnapshot.data().count,
                 subscriptionStatus: userData.subscriptionStatus || 'none',
+                streak: userData.streak || 0,
                 lastLogin: userData.lastLogin?.toDate?.()?.toISOString?.() || null,
-                createdAt: userData.createdAt?.toDate?.()?.toISOString?.() || null
+                createdAt: userData.dateJoined?.toDate?.()?.toISOString?.() || null
             });
         }
 
@@ -293,7 +312,7 @@ export async function handleGetPlatformStats(req, res) {
             db.collection('Flashcard').count().get(),
             db.collection('Material').count().get(),
             db.collection('ConceptMap').count().get(),
-            db.collection('User').where('isDeleted', '!=', true).get()
+            db.collection('User').get() // Fetch all to filter in memory
         ]);
 
         // Subscription distribution from full user docs
@@ -302,8 +321,10 @@ export async function handleGetPlatformStats(req, res) {
         let totalUsers = 0;
 
         users.docs.forEach(doc => {
-            totalUsers++;
             const data = doc.data();
+            if (data.isDeleted === true) return;
+
+            totalUsers++;
             const plan = data.subscription || 'free';
             const status = data.subscriptionStatus || 'none';
             planCounts[plan] = (planCounts[plan] || 0) + 1;
@@ -338,6 +359,10 @@ export async function handleGetPlatformStats(req, res) {
 
 export async function handleGetRevenueMetrics(req, res) {
     try {
+        const { startDate, endDate } = req.query;
+        const start = startDate ? new Date(startDate) : null;
+        const end = endDate ? new Date(endDate) : null;
+
         const snapshot = await db.collection('Transaction')
             .where('status', '==', 'success')
             .orderBy('timestamp', 'desc')
@@ -351,10 +376,19 @@ export async function handleGetRevenueMetrics(req, res) {
 
         snapshot.docs.forEach(doc => {
             const data = doc.data();
+
+            // In-memory date filter
+            const dateObj = data.timestamp?.toDate?.();
+            if (dateObj) {
+                if (start && dateObj < start) return;
+                if (end && dateObj > end) return;
+            } else if (start || end) {
+                return;
+            }
+
             const amount = data.amount || 0;
             const plan = data.tier || 'unknown';
             const currency = data.currency || 'N/A';
-            const dateObj = data.timestamp?.toDate?.();
             const month = dateObj ? `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}` : 'Unknown';
 
             totalRevenue += amount;

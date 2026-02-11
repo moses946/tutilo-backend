@@ -19,7 +19,7 @@ import analyticsRouter from './src/routes/AnalyticsRoutes.js';
 import webhookRouter from './src/routes/Webhooks.js';
 import transcriptionRouter from './src/routes/TranscriptionRoute.js';
 import { authMiddleWare } from './src/middleware/authMiddleWare.js';
-import { handleDeleteFirebaseAuthUser, verifyToken } from './src/services/firebase.js';
+import admin, { db, handleDeleteFirebaseAuthUser, verifyToken } from './src/services/firebase.js';
 import { handleMaterialDownload } from './src/controllers/NotebookController.js';
 import { handleBulkDeleteUsers, handleBulkNotebookDeletion, handleBulkNotebookIdRetrieval, handleSearchForDeletedNotebooks, handleSearchForDeletedUsers } from './src/utils/utility.js';
 import { logger } from './src/utils/logger.js';
@@ -144,6 +144,49 @@ app.use('/api/v1/transcription', authMiddleWare, transcriptionRouter);
 
 // Basic route
 app.get('/', (req, res) => res.send('Hello, Express + Cloud Run!'));
+
+// Cron job for Beta Expiration (Runs daily at 1 AM)
+cron.schedule('0 1 * * *', async () => {
+  console.log('Running Beta Expiration Check...');
+  try {
+    const now = admin.firestore.Timestamp.now();
+
+    // Fetch all beta users
+    const snapshot = await db.collection('User')
+      .where('subscriptionStatus', '==', 'beta_trial')
+      .get();
+
+    if (snapshot.empty) {
+      console.log('No active beta trials found.');
+      return;
+    }
+
+    const batch = db.batch();
+    let count = 0;
+
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      // Check if expired
+      if (data.betaExpiresAt && data.betaExpiresAt.toMillis() < now.toMillis()) {
+        batch.update(doc.ref, {
+          subscription: 'free',
+          subscriptionStatus: 'expired_beta',
+          betaExpiredAt: now
+        });
+        count++;
+      }
+    });
+
+    if (count > 0) {
+      await batch.commit();
+      console.log(`Expired ${count} beta trials.`);
+    } else {
+      console.log(`Checked ${snapshot.size} beta trials, none expired.`);
+    }
+  } catch (err) {
+    console.error('Beta expiration cron error:', err);
+  }
+});
 
 // Cron job for notebook deletion
 cron.schedule('* * * * *', async () => {

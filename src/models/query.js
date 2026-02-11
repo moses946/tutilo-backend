@@ -408,6 +408,10 @@ export const createUserQuery = async (data) => {
     // Check if user already exists
     const userDoc = await userRef.get();
     if (!userDoc.exists) {
+        // Beta Test Logic: Grant Plus Access for 30 Days
+        const betaExpiry = new Date();
+        betaExpiry.setDate(betaExpiry.getDate() + 30);
+
         // Create User document only if it doesn't exist
         await userRef.set({
             // Set the document ID manually using the provided uid (if available)
@@ -416,7 +420,11 @@ export const createUserQuery = async (data) => {
             firstName: data.firstName,
             lastName: data.lastName,
             lastLogin: now,
-            subscription: 'free',
+            subscription: 'plus', // BETA: Default to Plus
+            subscriptionStatus: 'beta_trial', // New status
+            betaExpiresAt: admin.firestore.Timestamp.fromDate(betaExpiry),
+            isBetaTester: true,
+            streak: 1,
             isOnboardingComplete: false
         })
     } else {

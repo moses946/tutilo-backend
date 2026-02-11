@@ -70,7 +70,8 @@ export async function handleLogin(req, res) {
             });
         }
 
-        let currentStreak = userData && userData.streak ? userData.streak : 0;
+        // Ensure streak is at least 1 for any logged-in user
+        let currentStreak = userData && userData.streak ? Math.max(userData.streak, 1) : 1;
         let lastLogin = userData && userData.lastLogin ? userData.lastLogin.toDate() : null;
 
         let newStreak = 1; // Default for new users or reset
@@ -84,7 +85,7 @@ export async function handleLogin(req, res) {
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
             if (diffDays === 0) {
-                // Same day login, maintain streak
+                // Same day login, maintain streak (guaranteed >= 1)
                 newStreak = currentStreak;
             } else if (diffDays === 1) {
                 // Consecutive day login, increment streak

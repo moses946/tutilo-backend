@@ -6,6 +6,7 @@ import qdrantClient from '../services/qdrant.js';
 import { handleBulkChunkRetrieval, handleSendToVideoGen } from '../utils/utility.js';
 import { agentPrompt, chatNamingPrompt, conceptMapPrompt, flashcardPrompt, videoGenFunctionDeclaration, chatSummarizationPrompt } from '../config/types.js';
 import { getModelConfig } from '../config/plans.js';
+import { bucket } from '../services/firebase.js';
 import { performance } from 'perf_hooks';
 import { userMap } from '../middleware/authMiddleWare.js';
 import { logTokenUsage } from '../utils/utility.js';
@@ -40,22 +41,33 @@ If no relevant results are found, you may fall back to general knowledge but mus
   }
 };
 
-const declineQueryToolDeclaration = {
-  name: 'decline_query',
-  description: 'Use this tool ONLY when the user asks a question completely unrelated to the notebook topic. This politely refuses to answer off-topic questions like weather, sports, cooking, general chat, etc.',
+const webSearchToolDeclaration = {
+  name: 'web_search',
+  description: `Search the web for supplementary information. Use this ONLY as a LAST RESORT when search_notebook returns no useful results AND the question is on-topic. Never use this for off-topic questions.`,
   parameters: {
     type: Type.OBJECT,
     properties: {
-      reason: {
+      query: {
         type: Type.STRING,
-        description: 'Brief explanation of why this is off-topic (e.g., "weather is not related to Biology")',
-      },
-      suggestedTopic: {
-        type: Type.STRING,
-        description: 'A suggested on-topic question the user could ask instead'
+        description: 'The search query to find information on the web'
       }
     },
-    required: ['reason']
+    required: ['query']
+  }
+};
+
+const imageGenToolDeclaration = {
+  name: 'generate_image',
+  description: `Generate an educational image, diagram, or illustration to visually explain a concept. Use this when a visual would genuinely help the student understand — e.g. diagrams, charts, labeled illustrations, process flows. Do NOT use for decorative purposes.`,
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      prompt: {
+        type: Type.STRING,
+        description: 'A detailed description of the educational image to generate. Be specific about what to show, labels, colors, and style. Example: "A labeled cross-section diagram of a plant cell showing the nucleus, mitochondria, chloroplasts, cell wall, and cell membrane with clear labels and arrows"'
+      }
+    },
+    required: ['prompt']
   }
 };
 
@@ -443,7 +455,7 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
     learningPreferences: userObj?.learningPreferences
   }));
 
-  let systemPromptText = agentPrompt(userObj, summary);
+  let systemPromptText = agentPrompt(userObj, summary, plan === 'pro', plan === 'pro');
   if (retrievedChunkText) {
     systemPromptText += `\n\n<PREVIOUSLY_RETRIEVED_CONTEXT>\n${retrievedChunkText}\n</PREVIOUSLY_RETRIEVED_CONTEXT>`;
   }
@@ -457,8 +469,14 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
   const historyForModel = chatObj.history.slice(0, -1); // All except last
   const currentTurn = [{ role: 'user', parts: messageContent }]; // The last message
 
+  const toolDeclarations = [retrievalToolDeclaration, videoGenFunctionDeclaration];
+  const hasWebSearch = plan === 'pro';
+  const hasImageGen = plan === 'pro';
+  if (hasWebSearch) toolDeclarations.push(webSearchToolDeclaration);
+  if (hasImageGen) toolDeclarations.push(imageGenToolDeclaration);
+
   const tools = [
-    { functionDeclarations: [retrievalToolDeclaration, videoGenFunctionDeclaration, declineQueryToolDeclaration] }
+    { functionDeclarations: toolDeclarations }
   ];
 
   let turnCount = 0;
@@ -467,6 +485,8 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
   let isMedia = false;
   let aiMessageRef;
   let collectedMetadata = {}; // To send back to UI for citations
+  let collectedWebSources = {}; // Web search source links
+  let generatedImageUrl = null; // Image gen URL
 
   // Start the ReAct Loop
   let currentContents = [...historyForModel, ...currentTurn];
@@ -679,25 +699,107 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
               functionResponse: { name: 'video_gen', response: { result: `Error: ${e.message}` } }
             });
           }
-        } else if (fn.name === 'decline_query') {
-          // Agent chose to decline the off-topic query
-          const reason = fn.args.reason || 'This question is outside the scope of your notebook.';
-          const suggestion = fn.args.suggestedTopic ? ` Try asking about: "${fn.args.suggestedTopic}"` : '';
-          finalResponseText = `I'm here to help you with your study material! ${reason}${suggestion}`;
+        }
+        else if (fn.name === 'web_search') {
+          sendStatusToUser(userId, 'Searching the web...');
+          try {
+            const searchQuery = fn.args.query;
+            const searchResponse = await ai.models.generateContent({
+              model: modelLimits.agentModel,
+              contents: searchQuery,
+              config: {
+                tools: [{ googleSearch: {} }],
+                thinkingConfig: { thinkingBudget: 0 }
+              }
+            });
 
-          // Stream this response as well if needed, though strictly it might not have been streamed in the loop above if it came as a tool call args (unlikely for text response).
-          // If the model called decline_query, it didn't output text yet. We are fabricating the text here.
-          // We should stream it to the user.
-          if (onChunk) onChunk(finalResponseText);
+            const searchText = searchResponse.text || 'No results found.';
 
-          aiMessageRef = await createMessageQuery({ content: [{ text: finalResponseText }], role: 'model', chatRef });
-          // Exit the loop immediately - no need for function response
-          return {
-            message: finalResponseText,
-            media: false,
-            messageRef: aiMessageRef,
-            chunkMetadata: {}
-          };
+            // Extract grounding sources and assign numbered indices
+            const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+            const webSources = groundingChunks
+              .filter(c => c.web?.uri && c.web?.title)
+              .map((c, i) => ({ index: i + 1, title: c.web.title, url: c.web.uri }));
+
+            // Store web sources for frontend citation rendering
+            webSources.forEach(s => {
+              collectedWebSources[`web:${s.index}`] = { title: s.title, url: s.url };
+            });
+
+            const sourcesListing = webSources
+              .map(s => `[web:${s.index}] ${s.title}: ${s.url}`)
+              .join('\n');
+
+            const resultText = `WEB SEARCH RESULTS:\n\n${searchText}\n\nSOURCES (Cite these using [web:N] format in your response):\n${sourcesListing || 'No sources available.'}`;
+
+            functionResponses.push({
+              functionResponse: { name: 'web_search', response: { result: resultText } }
+            });
+
+            // Log token usage for the search call
+            if (searchResponse.usageMetadata) {
+              await logTokenUsage(userId, modelLimits.agentModel, searchResponse.usageMetadata, 'web_search');
+            }
+          } catch (searchErr) {
+            console.error('[Web Search Error]:', searchErr.message);
+            functionResponses.push({
+              functionResponse: { name: 'web_search', response: { result: 'Web search failed. Answer from general knowledge if on-topic.' } }
+            });
+          }
+        }
+        else if (fn.name === 'generate_image') {
+          sendStatusToUser(userId, 'Generating image...');
+          try {
+            const imagePrompt = fn.args.prompt;
+            const imageResponse = await ai.models.generateContent({
+              model: 'gemini-3.1-flash-image-preview',
+              contents: `Create an educational illustration: ${imagePrompt}`,
+              config: {
+                responseModalities: ['Image'],
+              }
+            });
+
+            // Extract image from response
+            const imagePart = imageResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+
+            if (imagePart && imagePart.inlineData) {
+              const imageData = imagePart.inlineData.data;
+              const mimeType = imagePart.inlineData.mimeType || 'image/png';
+              const ext = mimeType.split('/')[1] || 'png';
+              const fileName = `img_${Date.now()}.${ext}`;
+              const storagePath = `notebooks/${notebookId}/chats/${chatRef.id}/images/${fileName}`;
+
+              // Upload to Cloud Storage
+              const buffer = Buffer.from(imageData, 'base64');
+              const blob = bucket.file(storagePath);
+              await blob.save(buffer, {
+                metadata: { contentType: mimeType },
+                resumable: false,
+              });
+              await blob.makePublic();
+              const publicUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+
+              generatedImageUrl = publicUrl;
+
+              functionResponses.push({
+                functionResponse: { name: 'generate_image', response: { result: `Image generated successfully. You MUST embed this image in your response using markdown: ![Generated Image](${publicUrl}) \n\nThen briefly describe what it shows.` } }
+              });
+
+              // Log usage
+              if (imageResponse.usageMetadata) {
+                await logTokenUsage(userId, 'gemini-3.1-flash-image-preview', imageResponse.usageMetadata, 'image_gen');
+              }
+            } else {
+              functionResponses.push({
+                functionResponse: { name: 'generate_image', response: { result: 'Image generation did not return an image. Describe the concept with text instead.' } }
+              });
+            }
+          } catch (imgErr) {
+            console.error('[Image Gen Error]:', imgErr.message);
+            functionResponses.push({
+              functionResponse: { name: 'generate_image', response: { result: `Image generation failed: ${imgErr.message}. Explain the concept with text instead.` } }
+            });
+          }
         }
       }
 
@@ -741,7 +843,9 @@ export async function agentLoop(userId, chatObj, chatRef, messageContent = [], s
     message: !isMedia ? finalResponseText : 'Your video is being created, ready in a bit',
     media: isMedia,
     messageRef: aiMessageRef,
-    chunkMetadata: collectedMetadata // Return new citations
+    chunkMetadata: collectedMetadata,
+    webSources: collectedWebSources,
+    generatedImageUrl
   };
 }
 

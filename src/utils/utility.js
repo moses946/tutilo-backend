@@ -4,6 +4,7 @@ import { ai } from '../models/models.js'
 import qdrantClient from '../services/qdrant.js'
 import { v4 } from 'uuid'
 import { deleteChatQuery, deleteNotebookQuery, updateNotebookWithNewMaterialQuery } from '../models/query.js';
+import pLimit from 'p-limit';
 // multer storage
 const storage = multer.memoryStorage();
 export const upload = multer({ storage });
@@ -27,7 +28,8 @@ export const handleFileUpload = async (file, path) => {
 
 export const handleBulkFileUpload = async (files, basePath) => {
     const timestamp = Date.now();
-    const uploads = files.map(async (file, index) => {
+    const limit = pLimit(5); // Stricter limit for file uploads as they are larger
+    const uploads = files.map((file, index) => limit(async () => {
         // Create a unique filename by adding timestamp and index before extension
         const originalName = file.originalname;
         const lastDotIndex = originalName.lastIndexOf('.');
@@ -43,13 +45,14 @@ export const handleBulkFileUpload = async (files, basePath) => {
         const uploadResult = await handleFileUpload(file, destination);
         // Override name with the actual safeName used in storage
         return { ...uploadResult, name: safeName };
-    });
+    }));
     return Promise.all(uploads);
 }
 
 export const handleBulkChunkUpload = async (chunks, basePath) => {
     // chunks: Array<{ name: string, chunks: Array<{pageNumber:number, text:string, tokenCount:number}> }>
-    const uploads = chunks.map(async (item) => {
+    const limit = pLimit(10); // Limit concurrency
+    const uploads = chunks.map((item) => limit(async () => {
         const safeName = `${item.name}.json`;
         const destination = `${basePath}/${safeName}`;
         const payload = Buffer.from(JSON.stringify(item.text), 'utf-8');
@@ -59,7 +62,7 @@ export const handleBulkChunkUpload = async (chunks, basePath) => {
             resumable: false,
         });
         return { path: destination, name: safeName, size: payload.length };
-    });
+    }));
     return Promise.all(uploads);
 }
 /*
@@ -90,7 +93,8 @@ export const handleBulkChunkRetrieval = async (paths) => {
     // Given an array of storage paths, retrieve all chunk contents in parallel
     // Returns: Array of chunk contents (parsed JSON or string)
     try {
-        const retrievals = paths.map(path => handleChunkRetrieval(path));
+        const limit = pLimit(10); // Limit concurrency to 10 to prevent socket hang up
+        const retrievals = paths.map(path => limit(() => handleChunkRetrieval(path)));
         return await Promise.all(retrievals);
     } catch (err) {
         console.error('Error in handleBulkChunkRetrieval:', err);

@@ -67,16 +67,13 @@ export async function handleGenerateNotebookQuiz(req, res) {
         res.status(500).json({ error: 'Failed to generate quiz' });
     }
 }
-// Helper to preprocess files safely
-const preprocessFileForPdfSimple = async (file) => {
+// Helper to generate a PDF preview buffer from a non-PDF file
+const generatePdfPreview = async (file) => {
     try {
         let pdfBuffer;
-        let newFilename = file.originalname;
-        let newMimetype = 'application/pdf';
+        let previewFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
 
-        if (file.mimetype === 'application/pdf') {
-            pdfBuffer = file.buffer;
-        } else if (file.mimetype.startsWith('image/')) {
+        if (file.mimetype.startsWith('image/')) {
             let extractedText = '';
             try {
                 const chunks = await extractContent(file);
@@ -85,40 +82,19 @@ const preprocessFileForPdfSimple = async (file) => {
                 }
             } catch (err) {
                 console.warn(`Pre-PDF image extraction failed for ${file.originalname}:`, err.message);
-                // Continue without text if extraction fails
             }
-
-
             pdfBuffer = await convertImageToPdf(file.buffer, file.mimetype, extractedText);
-            newFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
         } else {
-            // Fallback: Convert text-based formats to PDF
-            try {
-                const chunks = await extractContent(file);
-                const fullText = chunks.map(c => c.text).join('\n\n');
-                pdfBuffer = await convertTextToPdf(fullText);
-                newFilename = file.originalname.replace(/\.[^/.]+$/, "") + ".pdf";
-            } catch (e) {
-                console.error("Simple PDF conversion failed for file:", file.originalname, e);
-                // Return original if conversion fails, don't crash
-                return {
-                    originalFile: file,
-                    pdfBuffer: file.buffer,
-                    newFilename: file.originalname,
-                    newMimetype: file.mimetype
-                };
-            }
+            // Convert text-based formats (DOCX, PPTX, TXT, etc.) to PDF
+            const chunks = await extractContent(file);
+            const fullText = chunks.map(c => c.text).join('\n\n');
+            pdfBuffer = await convertTextToPdf(fullText);
         }
 
-        return {
-            originalFile: file,
-            pdfBuffer,
-            newFilename,
-            newMimetype
-        };
+        return { pdfBuffer, previewFilename };
     } catch (err) {
-        console.error("Critical error in preprocessing:", err);
-        throw err;
+        console.error("PDF preview generation failed for file:", file.originalname, err);
+        return null;
     }
 };
 
@@ -158,33 +134,39 @@ export async function handleNotebookCreation(req, res) {
         // 2. Create Notebook Document
         let notebookRef = await createNotebookQuery({ ...data, status: 'processing' });
 
-        // 3. Process Files (Convert to PDF)
-        const processedFiles = [];
-        for (const file of files) {
-            try {
-                const result = await preprocessFileForPdfSimple(file);
-                processedFiles.push(result);
-            } catch (e) {
-                console.error(`Failed to preprocess file ${file.originalname}:`, e);
-                // Skip failed file or handle gracefully
+        // 3. Upload original files as-is
+        const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
+        const uploadResults = await handleBulkFileUpload(files, noteBookBasePath);
+
+        // 4. Generate and upload PDF previews for non-PDF files
+        const previewBasePath = `notebooks/${notebookRef.id}/previews`;
+        const previewResults = [];
+        for (let i = 0; i < files.length; i++) {
+            if (files[i].mimetype === 'application/pdf') {
+                previewResults.push(null); // PDF files don't need a separate preview
+            } else {
+                try {
+                    const preview = await generatePdfPreview(files[i]);
+                    if (preview) {
+                        const previewFile = { ...files[i], buffer: preview.pdfBuffer, originalname: preview.previewFilename, mimetype: 'application/pdf' };
+                        const [previewUpload] = await handleBulkFileUpload([previewFile], previewBasePath);
+                        previewResults.push(previewUpload);
+                    } else {
+                        previewResults.push(null);
+                    }
+                } catch (e) {
+                    console.warn(`PDF preview generation failed for ${files[i].originalname}:`, e.message);
+                    previewResults.push(null);
+                }
             }
         }
 
-        const filesToUpload = processedFiles.map(pf => ({
-            ...pf.originalFile,
-            originalname: pf.newFilename,
-            mimetype: pf.newMimetype,
-            buffer: pf.pdfBuffer
-        }));
-
-        // 4. Upload to Storage
-        const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
-        const uploadResults = await handleBulkFileUpload(filesToUpload, noteBookBasePath);
-
-        // 5. Create Database Records - Use actual storage names from upload results
-        const filesWithStoragePaths = filesToUpload.map((file, index) => ({
+        // 5. Create Database Records with both original and preview paths
+        const filesWithStoragePaths = files.map((file, index) => ({
             ...file,
-            storageName: uploadResults[index].name // The actual filename in storage
+            storageName: uploadResults[index].name,
+            originalMimetype: file.mimetype,
+            previewStorageName: previewResults[index]?.name || null,
         }));
         const materialRefs = await createMaterialQuery(notebookRef, filesWithStoragePaths);
         await updateNotebookWithMaterials(notebookRef, materialRefs);
@@ -273,7 +255,7 @@ export async function handleNotebookProcessing(req, res) {
                     // --- NO MATCH: Process normally ---
                     const fileObj = {
                         buffer: buffer,
-                        mimetype: 'application/pdf',
+                        mimetype: materialData.originalMimetype || 'application/pdf',
                         originalname: materialData.name
                     };
                     const chunks = await extractContent(fileObj);
@@ -423,31 +405,46 @@ export async function handleNotebookUpdate(req, res) {
         }
 
         if (files.length > 0) {
-            const processedFiles = [];
-            for (const file of files) {
-                processedFiles.push(await preprocessFileForPdfSimple(file));
+            // Upload original files as-is
+            const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
+            const uploadResults = await handleBulkFileUpload(files, noteBookBasePath);
+
+            // Generate and upload PDF previews for non-PDF files
+            const previewBasePath = `notebooks/${notebookRef.id}/previews`;
+            const previewResults = [];
+            for (let i = 0; i < files.length; i++) {
+                if (files[i].mimetype === 'application/pdf') {
+                    previewResults.push(null);
+                } else {
+                    try {
+                        const preview = await generatePdfPreview(files[i]);
+                        if (preview) {
+                            const previewFile = { ...files[i], buffer: preview.pdfBuffer, originalname: preview.previewFilename, mimetype: 'application/pdf' };
+                            const [previewUpload] = await handleBulkFileUpload([previewFile], previewBasePath);
+                            previewResults.push(previewUpload);
+                        } else {
+                            previewResults.push(null);
+                        }
+                    } catch (e) {
+                        console.warn(`PDF preview generation failed for ${files[i].originalname}:`, e.message);
+                        previewResults.push(null);
+                    }
+                }
             }
 
-            const filesToUpload = processedFiles.map(pf => ({
-                ...pf.originalFile,
-                originalname: pf.newFilename,
-                mimetype: pf.newMimetype,
-                buffer: pf.pdfBuffer
-            }));
-            const noteBookBasePath = `notebooks/${notebookRef.id}/materials`;
-            const uploadResults = await handleBulkFileUpload(filesToUpload, noteBookBasePath);
-
-            // Use actual storage names from upload results
-            const filesWithStoragePaths = filesToUpload.map((file, index) => ({
+            // Create database records with both original and preview paths
+            const filesWithStoragePaths = files.map((file, index) => ({
                 ...file,
-                storageName: uploadResults[index].name
+                storageName: uploadResults[index].name,
+                originalMimetype: file.mimetype,
+                previewStorageName: previewResults[index]?.name || null,
             }));
             const materialRefs = await createMaterialQuery(notebookRef, filesWithStoragePaths);
             let newChunkRefsCombined = [];
             let newChunksCombined = [];
 
-            for (let i = 0; i < filesToUpload.length; i++) {
-                const file = filesToUpload[i];
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
                 const materialRef = materialRefs[i];
 
                 const chunks = await extractContent(file);
@@ -879,12 +876,25 @@ export async function handleMaterialDownload(req, res) {
         }
 
         const materialData = materialSnap.data();
-        const storagePath = materialData.storagePath;
-        const normalizedPath = storagePath.startsWith('notebooks/')
-            ? storagePath
-            : `notebooks/${notebookId}/materials/${storagePath}`;
 
-        const file = bucket.file(normalizedPath);
+        // Support ?preview=true to serve the PDF preview instead of the original
+        const isPreview = req.query.preview === 'true';
+        let targetPath;
+
+        if (isPreview && materialData.previewStoragePath) {
+            // Serve the PDF preview
+            targetPath = materialData.previewStoragePath.startsWith('notebooks/')
+                ? materialData.previewStoragePath
+                : `notebooks/${notebookId}/previews/${materialData.previewStoragePath}`;
+        } else {
+            // Serve the original file
+            const storagePath = materialData.storagePath;
+            targetPath = storagePath.startsWith('notebooks/')
+                ? storagePath
+                : `notebooks/${notebookId}/materials/${storagePath}`;
+        }
+
+        const file = bucket.file(targetPath);
         const [exists] = await file.exists();
         if (!exists) {
             return res.status(404).json({ error: 'File not found' });
@@ -892,7 +902,7 @@ export async function handleMaterialDownload(req, res) {
 
         const [metadata] = await file.getMetadata();
         const contentType = metadata?.contentType || 'application/octet-stream';
-        const fileName = materialData.name || metadata?.name || storagePath;
+        const fileName = materialData.name || metadata?.name || targetPath;
 
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
@@ -927,6 +937,8 @@ export async function handleNotebookFetch(req, res) {
                             id: snap.id,
                             name: data.name || data.storagePath || 'Untitled Material',
                             storagePath: data.storagePath,
+                            originalMimetype: data.originalMimetype || 'application/pdf',
+                            previewStoragePath: data.previewStoragePath || null,
                         };
                     });
             } catch (error) {

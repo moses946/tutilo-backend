@@ -260,7 +260,9 @@ export async function handleCreateMessage(req, res) {
             type: 'final',
             message: result.message,
             media: result.media,
-            chunkMetadata: result.chunkMetadata
+            chunkMetadata: result.chunkMetadata,
+            webSources: result.webSources,
+            generatedImageUrl: result.generatedImageUrl
         }) + '\n');
 
         res.end();

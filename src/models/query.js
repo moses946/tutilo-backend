@@ -50,6 +50,8 @@ export const createMaterialQuery = async (notebookRef, materials) => {
             name: materials[0].originalname || materials[0].name,
             status: 'processed',
             storagePath: materials[0].storageName || materials[0].originalname || materials[0].name,
+            originalMimetype: materials[0].originalMimetype || materials[0].mimetype || 'application/pdf',
+            previewStoragePath: materials[0].previewStorageName || null,
             dateCreated: now,
             chunkRefs: [] // Will be populated with chunk references
         });
@@ -63,8 +65,9 @@ export const createMaterialQuery = async (notebookRef, materials) => {
                 name: material.originalname || material.name,
                 status: 'processed',
                 storagePath: material.storageName || material.originalname || material.name,
+                originalMimetype: material.originalMimetype || material.mimetype || 'application/pdf',
+                previewStoragePath: material.previewStorageName || null,
                 dateCreated: now,
-
             };
             batch.set(materialRef, materialDoc);
             materialRefs.push(materialRef);
